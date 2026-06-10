@@ -83,6 +83,240 @@ The session alarm log is available at **`GET /api/alarm-log.csv`** (dataset sche
 
 ---
 
+## How it works — algorithm & engine
+
+This section documents the full processing pipeline and the simulation engine. The
+first half is written for **developers and users**; the second half for
+**researchers** who need the modelling assumptions, formulas and limitations.
+
+### A. Developer & user view
+
+#### A.1 End-to-end pipeline
+
+```
+                 ns-3 LTE C++ core (ran-alarm-sim)
+   ┌───────────────────────────────────────────────────────────┐
+   │  EPC + eNBs + UEs + RF propagation + mobility + RLF + X2   │
+   │  LTE trace sources ──► event objects ──► stdout JSON lines │
+   └───────────────────────────────────────────────────────────┘
+        │  "@@ALARM@@ {json}"  /  "@@CLOCK@@ <sim_seconds>"
+        ▼
+   sim_server.py (Flask)  ── parses stdout, RPUSH ─►  Redis list  ns3:events
+        ▲ REST control (/start /stop /inject /link-failure /speed /status)
+        │
+   FastAPI backend ── BLPOP ns3:events ─► AlarmMapper.map_event() ─► enriched alarm
+        │                                                      │
+        │  per-source one-behind buffer ─► ns3_alarm_log.csv   │ (dataset schema)
+        ▼                                                      ▼
+   SSE  /api/stream/{session}  ─────────────────────────►  Browser UI
+                                          (console, topology, dashboard, watcher,
+                                           live analytics, CSV export)
+```
+
+A single ns-3 event becomes a fully-formed RAN alarm record. The **trigger, node,
+timing and SINR/link-state are produced by ns-3**; the **alarm vocabulary** (name,
+severity, NE type, `Next_Alarm`) is drawn from tables calibrated on the real dataset.
+
+#### A.2 The ns-3 core process
+
+`ns3-sim/ran-alarm-sim.cc` is a standard ns-3 program (compiled into the image,
+run directly — no cppyy). On launch it:
+
+1. reads a line-format **scenario** (`NODE id x y`, `EDGE a b`, `UEPERENB`, `UESPEED`,
+   `SPEED`, `REALTIME`) written by `sim_server`;
+2. builds the LTE/EPC scenario (§B.1) and connects to LTE trace sources;
+3. runs the simulator, printing one JSON line per RAN event and a periodic clock
+   heartbeat;
+4. every 0.5 sim-seconds polls a **commands file** for fault injections;
+5. stops on `SIGTERM`.
+
+Communication with `sim_server` is line-oriented stdout with markers:
+`@@ALARM@@ {event-json}`, `@@CLOCK@@ <sim_seconds>`, `@@READY@@ …`.
+
+#### A.3 Alarm-mapping algorithm
+
+For each raw ns-3 event, `backend/alarm_mapper.py::map_event` runs:
+
+1. **Resolve a name.** The event's `event_type` (e.g. `radio_link_failure`) indexes a
+   candidate list; one candidate is chosen by **frequency-weighted sampling** —
+   `P(name) ∝ dataset_frequency(name)`. (`manual_injection` uses the operator's exact
+   name; `dataset_alarm` samples across all 171 types.)
+2. **Severity** = the dataset **modal** severity for that alarm name.
+3. **NE type** = the dataset modal NE type for that alarm name.
+4. **`Next_Alarm`** = a draw from the alarm's **Markov row** `P(next | name)` learned
+   from the dataset's `Next_Alarm` column.
+5. **Location Information** = a per-alarm template filled from the node id and event
+   metadata.
+
+#### A.4 Wall-clock pacing
+
+ns-3 LTE cannot run at 1× wall-clock for many eNBs, and `RealtimeSimulatorImpl`
+stalls. Instead the sim runs free and event **emission** is paced in software
+(`PaceWall`): for consecutive events at sim-times `t₁, t₂`,
+
+```
+wall_gap = min( (t₂ − t₁) / speed , PACE_CAP )          PACE_CAP = 2 s
+```
+
+so the inter-alarm wall spacing tracks the inter-alarm sim spacing compressed by
+`speed` (sim-seconds per wall-second, the “×” slider), while quiet periods are capped
+at 2 s. Genuine bursts/cascades (events microseconds apart in sim-time) stay visually
+together. `speed` is the CPU ceiling — if ns-3 is slower than requested, emission
+simply runs at the achievable rate.
+
+#### A.5 Fault injection
+
+- **Radio fault** (`inject`, radio-type) → the target eNB's downlink `TxPower` is
+  dropped to ~1 dBm for 5 s → its UEs genuinely lose sync → real RLF/release alarms.
+- **Transport fault** (`inject` transport-type, or `link-failure`) → a 100%-loss
+  error model is enabled on the real S1-U backhaul and/or X2 link → real packet loss;
+  the cell's delivered throughput is **measured** and a confirmed outage alarm is
+  raised (§B.4).
+
+The operator's requested alarm is also surfaced immediately as a `manual_injection`
+marker, and the downstream alarms it causes are genuine ns-3 events.
+
+#### A.6 Server-side alarm log
+
+`redis_consumer.py` appends every enriched alarm to `ns3_alarm_log.csv` in the exact
+dataset schema. `Next_Alarm` is filled the way the source dataset was built: each row
+is **held one step** and finalised when the next alarm on the same source arrives.
+Download it at `GET /api/alarm-log.csv`.
+
+#### A.7 Control plane & sessions
+
+`POST /api/simulate/start` configures + starts the ns-3 core and opens an **SSE
+session** with its own queue; the consumer broadcasts every alarm to all sessions.
+Other endpoints: `inject`, `link-failure`, `speed`, `stats`, `DELETE` (stop),
+`/api/analytics`, `/api/alarm-catalog`, `/api/demo-topology`.
+
+#### A.8 Key parameters
+
+| Parameter | Value | Where |
+|---|---|---|
+| Time compression `speed` | 30× default (UI slider) | scenario `SPEED` |
+| Pace cap | 2 s | `PACE_CAP_S` |
+| Interference alarm threshold / holdoff | SINR < 5 dB / 3 s per cell | `g_sinrAlarmThreshDb` |
+| Warm-up suppression | 1.0 sim-s | `g_warmupS` |
+| UEs per eNB | 4 / 3 / 2 / 1 for ≤20 / ≤60 / ≤120 / >120 nodes | `sim_server` |
+| Coordinate scale | 5 m per canvas pixel | `ran-alarm-sim.cc` |
+
+#### A.9 Extending
+
+- **New event→alarm mapping:** add the `event_type` and candidate names to
+  `EVENT_TO_ALARM_CANDIDATES` in `alarm_mapper.py`, emit that `event_type` from the C++.
+- **New node type:** add to `NODE_TYPES` in `frontend/app.js` (shape/colour/size).
+- **New topology:** add a generator to the `TOPOLOGIES` registry in `frontend/app.js`.
+- **Recalibrate:** re-run `scripts/02_analyze.py` to regenerate `mapper_stats.json`
+  and `analytics.json`.
+
+---
+
+### B. Academic / researcher view
+
+#### B.1 The ns-3 LTE scenario
+
+One ns-3 LTE cell per topology node, an EPC (`PointToPointEpcHelper`: PGW/SGW +
+S1-U/S1-AP), and `UEs/eNB` UEs (§A.8) attached to their home cell. Radio configuration:
+
+| Aspect | Setting |
+|---|---|
+| Bandwidth | 25 PRB (5 MHz) downlink & uplink |
+| eNB / UE Tx power | 43 dBm / 23 dBm |
+| Path-loss model | `LogDistancePropagationLossModel`, exponent **3.9**, reference loss **38.57 dB @ 1 m** |
+| MAC scheduler | Proportional-Fair (`PfFfMacScheduler`) |
+| Handover | `A3RsrpHandoverAlgorithm` (event-A3, RSRP) over X2 |
+| RRC | real RRC (`UseIdealRrc=false`); Ctrl + Data error models enabled |
+| Geometry | eNB mast 30 m, UE 1.5 m, positions = canvas × 5 m |
+
+Mobility: `RandomWalk2dMobilityModel`, 45 m/s, re-orienting every 80 m, bounded to the
+topology bounding box + 150 m. UEs are seeded on a **golden-angle spiral** 60–390 m
+from their home eNB so a fraction begin at cell edges (front-loading edge effects).
+
+#### B.2 Radio-link-failure model
+
+RLF follows 3GPP TS 36.331 out-of-sync handling. `LteUePhy` issues out-of-sync
+indications when downlink quality drops; after **N310 = 2** consecutive out-of-sync
+indications, timer **T310 = 500 ms** starts, and on expiry (without **N311 = 1**
+in-sync recovery) `LteUeRrc::RadioLinkFailure` fires. These are deliberately sensitive
+3GPP-valid values so RLF is reachable at cell edge within a tractable run.
+
+#### B.3 Event → alarm calibration
+
+Calibration tables (`scripts/02_analyze.py` → `mapper_stats.json`) are estimated from
+the analysis split (951,468 alarms; holdout excluded):
+
+- **Frequency** `f(a)` = empirical count of alarm `a`; used as sampling weights.
+- **Severity / NE type** = modal value per alarm (`argmax` of the conditional).
+- **Transition matrix** `T(a, a') = count(a→a') / Σ count(a→·)` from the `Next_Alarm`
+  column — a first-order Markov chain over alarm names.
+- **Inter-arrival samples** per alarm (capped) from `Hours_since_prior`.
+
+The simulator therefore separates **mechanism** (ns-3 physics decides *when*, *where*
+and *which fault class*) from **labelling** (the dataset decides the *name/severity/NE
+and the stochastic successor*). This is a calibrated digital-twin construction, not a
+replay of the dataset.
+
+#### B.4 Transport-fault model & outage detection
+
+S1-U backhaul and X2 links are real `PointToPoint` channels. A fault attaches a
+`RateErrorModel` (`ERROR_UNIT_PACKET`, rate 1.0) to **both endpoints**, dropping all
+packets. Backhaul outage is **verified by observation**: at fault time the cumulative
+downlink bytes of the UEs served by the cell are snapshotted; after a 2 s window the
+delivered rate is computed,
+
+```
+throughput_kbps = (ΣRx_after − ΣRx_before) · 8 / 1000 / 2
+```
+
+and a `cell_service_outage` alarm is raised only if it falls below 5 kbps — i.e. the
+alarm reflects a measured loss of user-plane service, not merely the trigger. X2 cuts
+manifest as genuine `HandoverEndError` events. To keep large topologies tractable, X2
+follows topology edges rather than a full mesh (O(E) vs O(n²)).
+
+#### B.5 Live analytics
+
+Computed in the browser from the session's alarm stream (`frontend/app.js`):
+
+- **Propagation pathways:** observed `P(a→a') = count(a→a') / Σ count(a→·)`.
+- **Node / NE resilience index** (0–100):
+  `R = 100·(0.5·recovery + 0.3·min(median_gap / 72 h, 1) + 0.2·(1 − critical_rate))`,
+  where `recovery` = fraction self-clearing to `Noalarm`. (Same definition as the
+  historical analytic, applied to live counts.)
+- **Intra-node timing:** distribution of gaps between consecutive alarms on a node, in
+  ns-3 simulated seconds.
+- **Cross-node propagation:** gaps between temporally-consecutive alarms on *different*
+  nodes (global sim-time order) — a heuristic proxy for fault spread, not a verified
+  causal link.
+
+The same four analytics precomputed on the full dataset are available as the
+**Historical** baseline.
+
+#### B.6 Validity, assumptions & limitations
+
+- **Physically grounded fault domains:** radio (RLF, handover failure, RRC timeout,
+  random-access failure, abnormal release, SINR/interference) and transport (S1-U/X2
+  link loss with measured outage). **Not modelled** (injection-only labels): hardware,
+  DC power, ALD/antenna-line, licensing, environment — an LTE radio simulator has no
+  such components to fail. This boundary is explicit and reported in the UI.
+- **Scale:** ns-3 LTE is CPU-bound; live operation is practical to ~30 eNBs. Larger
+  topologies load for design/visualisation/watcher analysis but stream sparsely; UE
+  counts auto-scale and X2 is edge-based to keep them runnable.
+- **Cross-node propagation** is a temporal-correlation proxy, not established causality.
+- **Calibration provenance:** names/severities/transitions are dataset-conditioned;
+  absolute alarm *rates* are governed by the ns-3 scenario (mobility, density,
+  thresholds), not by the dataset's historical rates.
+
+#### B.7 Reproducibility
+
+ns-3 RNG streams are fixed (`AssignStreams`), so a given scenario + parameters is
+deterministic up to host-timing in the wall-clock pacing layer (which affects display
+cadence only, not the sequence of simulated events). All engine constants are the
+literals in §A.8/§B.1–B.2. The dataset split is deterministic (`scripts/01_split_holdout.py`,
+seed 42); the 2,000-row holdout is never analysed.
+
+---
+
 ## Repository layout
 
 ```
