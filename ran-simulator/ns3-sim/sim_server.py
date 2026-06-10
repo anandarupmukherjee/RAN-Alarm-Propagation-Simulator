@@ -88,7 +88,11 @@ def _write_scenario():
         lines.append(f"NODE {nid} {x} {y}")
     for e in edges:
         lines.append(f"EDGE {e.get('source')} {e.get('target')}")
-    lines.append(f"UEPERENB {_ue_per_enb}")
+    # Scale UEs down for large topologies so the ns-3 LTE sim stays feasible.
+    nn = len(nodes)
+    ue_per = 4 if nn <= 20 else 3 if nn <= 60 else 2 if nn <= 120 else 1
+    ue_per = min(ue_per, _ue_per_enb)
+    lines.append(f"UEPERENB {ue_per}")
     lines.append(f"UESPEED {_ue_speed}")
     lines.append(f"SPEED {_sim_speed}")
     lines.append("REALTIME 1")

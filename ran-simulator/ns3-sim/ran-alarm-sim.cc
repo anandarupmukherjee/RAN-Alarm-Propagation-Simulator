@@ -605,7 +605,22 @@ int main(int argc, char* argv[])
         lteHelper->Attach(ueDevs.Get(u), enbDevs.Get(u % numEnb));
     }
 
-    lteHelper->AddX2Interface(enbNodes);
+    // X2 only between topology-adjacent eNBs (matches the visible backhaul edges).
+    // A full mesh would be O(n^2) — ~20k links for a 200-node national topology —
+    // and unusable; edge-based X2 keeps large topologies feasible.
+    {
+        std::map<std::string, uint16_t> siteIdx;
+        for (uint16_t i = 0; i < numEnb; i++) siteIdx[g_sites[i].id] = i;
+        int x2added = 0;
+        for (auto& e : g_edges)
+        {
+            auto ia = siteIdx.find(e.first), ib = siteIdx.find(e.second);
+            if (ia == siteIdx.end() || ib == siteIdx.end() || ia->second == ib->second) continue;
+            lteHelper->AddX2Interface(enbNodes.Get(ia->second), enbNodes.Get(ib->second));
+            if (++x2added >= 800) break;     // safety cap
+        }
+        std::cerr << "[ranalarm] X2: " << x2added << " edge-based interfaces" << std::endl;
+    }
 
     // ── Transport layer: index the REAL backhaul (S1-U) and X2 point-to-point
     // links so they can be genuinely cut (100% packet loss). An eNB's P2P link

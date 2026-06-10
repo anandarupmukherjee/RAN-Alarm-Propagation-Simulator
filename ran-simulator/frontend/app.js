@@ -14,6 +14,42 @@ const SEV_COLOR = {
 const SEV_CLASS = {
   Critical: 'h-critical', Major: 'h-major', Minor: 'h-minor', Warning: 'h-warning'
 };
+
+// ─── Node type catalogue (shape + colour by RAN role) ───────────────────────────
+// Each topology node carries an ne_type; we render its category by shape/colour so
+// the network role is visible at a glance (severity is shown by the border ring).
+const NODE_TYPES = [
+  { id: 'NE40E (Core)',          cat: 'Core router',     color: '#7c4dff', shape: 'diamond',         size: 58 },
+  { id: 'CX600 (Core)',          cat: 'Core router',     color: '#7c4dff', shape: 'diamond',         size: 58 },
+  { id: 'ATN 910 (Agg)',         cat: 'Aggregation',     color: '#1f8fb0', shape: 'hexagon',         size: 50 },
+  { id: 'RTN 950 (MW)',          cat: 'Microwave relay', color: '#13a07a', shape: 'rectangle',       size: 42 },
+  { id: 'BTS3900 LTE',           cat: 'eNodeB (4G/LTE)', color: '#1a6fd8', shape: 'ellipse',         size: 46 },
+  { id: 'BTS5900 5G',            cat: 'gNodeB (5G)',     color: '#c026d3', shape: 'round-triangle',  size: 48 },
+  { id: 'BTS3900 GSM',           cat: 'GSM (2G)',        color: '#b08400', shape: 'round-rectangle', size: 44 },
+  { id: 'GBTS',                  cat: 'GSM (2G)',        color: '#b08400', shape: 'round-rectangle', size: 44 },
+  { id: 'RRU3953',               cat: 'Small cell',      color: '#2f7fc7', shape: 'ellipse',         size: 34 },
+  { id: 'Lampsite (Small Cell)', cat: 'Small cell',      color: '#2f7fc7', shape: 'ellipse',         size: 34 },
+  { id: '9549',                  cat: 'Controller',      color: '#5b6b8c', shape: 'octagon',         size: 48 },
+];
+const DEFAULT_TYPE = { id: 'BTS3900 LTE', cat: 'eNodeB (4G/LTE)', color: '#1a6fd8', shape: 'ellipse', size: 46 };
+
+function typeInfo(neType) {
+  return NODE_TYPES.find(t => t.id === neType) || { ...DEFAULT_TYPE, id: neType || DEFAULT_TYPE.id };
+}
+// Build the display data (shape/colour/size) for a node from its ne_type.
+function decorateNode(n) {
+  const ti = typeInfo(n.ne_type);
+  return {
+    id:        n.id,
+    label:     n.label || n.id,
+    site_id:   n.site_id || n.id,
+    ne_type:   n.ne_type || DEFAULT_TYPE.id,
+    typeColor: ti.color,
+    typeShape: ti.shape,
+    w:         ti.size,
+    h:         ti.size,
+  };
+}
 // ─── State ────────────────────────────────────────────────────────────────────
 let cy;               // Cytoscape instance
 let sessionId = null;
@@ -50,10 +86,32 @@ let lastSimBySourceName = {}; // "source||name" → last sim_time (Hours_since_s
 // ─── Init ─────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   initCytoscape();
+  populateTopologyDropdown();
+  renderTypeLegend();
   loadAlarmTypes();
   checkNs3Status();
   document.addEventListener('keydown', onKeyDown);
 });
+
+// Build the topology dropdown from the registry
+function populateTopologyDropdown() {
+  const sel = document.getElementById('topo-select');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">Load topology…</option>' +
+    Object.entries(TOPOLOGIES).map(([k, v]) => `<option value="${k}">${escHtml(v.label)}</option>`).join('');
+}
+
+// Render the node-type legend (shape + colour per RAN role)
+function renderTypeLegend() {
+  const el = document.getElementById('type-legend');
+  if (!el) return;
+  const seen = new Set();
+  const items = [];
+  NODE_TYPES.forEach(t => { if (!seen.has(t.cat)) { seen.add(t.cat); items.push(t); } });
+  el.innerHTML = items.map(t =>
+    `<span class="tl-item"><span class="tl-dot tl-${t.shape}" style="background:${t.color}"></span>${escHtml(t.cat)}</span>`
+  ).join('');
+}
 
 // ─── Cytoscape setup ──────────────────────────────────────────────────────────
 function initCytoscape() {
@@ -64,51 +122,67 @@ function initCytoscape() {
       {
         selector: 'node',
         style: {
-          'background-color':    '#0b1829',
-          'border-color':        '#1d3461',
+          'background-color':    'data(typeColor)',
+          'background-opacity':  0.55,
+          'border-color':        '#2a4a7a',
           'border-width':        2,
-          'width':               52, 'height': 52,
+          'width':               'data(w)', 'height': 'data(h)',
           'label':               'data(label)',
-          'color':               '#8b9dc3',
-          'font-size':           '11px',
+          'color':               '#9fb2d6',
+          'font-size':           '10px',
           'text-valign':         'bottom',
-          'text-margin-y':       6,
+          'text-margin-y':       5,
           'font-family':         'JetBrains Mono, monospace',
           'text-outline-width':  2,
           'text-outline-color':  '#030712',
-          'shape':               'ellipse',
-          'transition-property': 'border-color, background-color, border-width',
+          'shape':               'data(typeShape)',
+          'transition-property': 'border-color, border-width',
           'transition-duration': '0.3s',
         }
       },
+      // Severity is shown ONLY by the border ring, so node fill keeps showing type.
       {
         selector: 'node.healthy',
-        style: { 'border-color': '#00a152', 'border-width': 2 }
+        style: { 'border-color': '#1f9e57', 'border-width': 2 }
       },
       {
         selector: 'node.h-warning',
-        style: { 'border-color': '#4d9fff', 'border-width': 2, 'background-color': '#0a1a2d' }
+        style: { 'border-color': '#4d9fff', 'border-width': 3 }
       },
       {
         selector: 'node.h-minor',
-        style: { 'border-color': '#ffd60a', 'border-width': 3, 'background-color': '#2a2200' }
+        style: { 'border-color': '#ffd60a', 'border-width': 3 }
       },
       {
         selector: 'node.h-major',
-        style: { 'border-color': '#ff9500', 'border-width': 3, 'background-color': '#2d1a00' }
+        style: { 'border-color': '#ff9500', 'border-width': 4 }
       },
       {
         selector: 'node.h-critical',
-        style: { 'border-color': '#ff3b30', 'border-width': 4, 'background-color': '#2d0a09',
-                 'color': '#ff8580' }
+        style: { 'border-color': '#ff3b30', 'border-width': 5, 'color': '#ff8580' }
       },
       {
         selector: 'node:selected',
-        style: { 'border-color': '#00d4ff', 'border-width': 3 }
+        style: { 'border-color': '#00d4ff', 'border-width': 4 }
       },
       {
         selector: 'node.adding-edge',
         style: { 'border-color': '#b388ff', 'border-width': 3 }
+      },
+      // Watcher highlighting
+      {
+        selector: 'node.watched',
+        style: { 'border-color': '#00e5ff', 'border-width': 6,
+                 'background-opacity': 0.85, 'color': '#7af7ff', 'font-size': '13px',
+                 'overlay-color': '#00e5ff', 'overlay-opacity': 0.18, 'overlay-padding': 10 }
+      },
+      {
+        selector: 'node.watch-neighbour',
+        style: { 'border-color': '#00b8d4', 'border-width': 3, 'background-opacity': 0.75 }
+      },
+      {
+        selector: 'node.dimmed',
+        style: { 'opacity': 0.32 }
       },
       {
         selector: 'edge',
@@ -132,6 +206,20 @@ function initCytoscape() {
       {
         selector: 'edge:selected',
         style: { 'line-color': '#00d4ff', 'width': 3 }
+      },
+      // Watcher edge highlighting + propagation flash
+      {
+        selector: 'edge.watch-edge',
+        style: { 'line-color': '#00b8d4', 'width': 3 }
+      },
+      {
+        selector: 'edge.cascade-flash',
+        style: { 'line-color': '#ff3b30', 'width': 5, 'target-arrow-shape': 'triangle',
+                 'target-arrow-color': '#ff3b30', 'mid-target-arrow-color': '#ff3b30' }
+      },
+      {
+        selector: 'edge.dimmed',
+        style: { 'opacity': 0.18 }
       },
     ],
     layout:   { name: 'preset' },
@@ -199,17 +287,64 @@ function setMode(mode) {
 }
 
 let nodeCounter = 1;
+let pendingNodePos = null;     // canvas position awaiting the Add-Node dialog
+
+// Clicking empty canvas in addNode mode opens a dialog to name + type the node.
 function addNodeAt(position) {
-  const id   = `NODE-${nodeCounter++}`;
+  pendingNodePos = position;
+  openAddNodeModal();
+}
+
+function createNode(name, neType, position) {
+  const id = name && name.trim() ? name.trim() : `NODE-${nodeCounter++}`;
+  if (cy.getElementById(id).length) { showToast(`Node "${id}" already exists`, 'error'); return null; }
   const node = cy.add({
     group: 'nodes',
-    data:  { id, label: id, site_id: id, ne_type: 'BTS3900 LTE' },
+    data:  decorateNode({ id, label: id, site_id: id, ne_type: neType }),
     position,
   });
   node.addClass('healthy');
   rebuildTopology();
   selectNode(node);
   populateNodeSelects();
+  return node;
+}
+
+// ─── Add-Node dialog (name + type) ─────────────────────────────────────────────
+function ensureTypeSelect(selId, selected) {
+  const sel = document.getElementById(selId);
+  if (!sel) return;
+  // Group options by category
+  const byCat = {};
+  NODE_TYPES.forEach(t => { (byCat[t.cat] = byCat[t.cat] || []).push(t); });
+  sel.innerHTML = Object.entries(byCat).map(([cat, types]) =>
+    `<optgroup label="${cat}">` +
+    types.map(t => `<option value="${escHtml(t.id)}"${t.id === selected ? ' selected' : ''}>${escHtml(t.id)}</option>`).join('') +
+    `</optgroup>`).join('');
+}
+
+function openAddNodeModal() {
+  ensureTypeSelect('an-type', 'BTS3900 LTE');
+  const nameInput = document.getElementById('an-name');
+  nameInput.value = `NODE-${nodeCounter}`;
+  document.getElementById('addnode-overlay').classList.remove('hidden');
+  document.getElementById('addnode-modal').classList.remove('hidden');
+  setTimeout(() => { nameInput.focus(); nameInput.select(); }, 30);
+}
+
+function closeAddNodeModal() {
+  document.getElementById('addnode-overlay').classList.add('hidden');
+  document.getElementById('addnode-modal').classList.add('hidden');
+  pendingNodePos = null;
+}
+
+function confirmAddNode() {
+  const name   = document.getElementById('an-name').value;
+  const neType = document.getElementById('an-type').value || 'BTS3900 LTE';
+  const pos    = pendingNodePos || { x: 400, y: 400 };
+  closeAddNodeModal();
+  const node = createNode(name, neType, pos);
+  if (node) showToast(`Added ${neType} "${node.id()}"`, 'success');
 }
 
 function handleEdgeCreation(target) {
@@ -254,9 +389,10 @@ function clearTopology() {
 
 // Render a {nodes, edges} topology object onto the canvas (shared by all loaders)
 function applyTopology(data, message) {
+  stopWatch();
   cy.elements().remove();
   data.nodes.forEach(n => {
-    cy.add({ group: 'nodes', data: { id: n.id, label: n.label || n.id, site_id: n.site_id || n.id, ne_type: n.ne_type }, position: { x: n.x, y: n.y } });
+    cy.add({ group: 'nodes', data: decorateNode(n), position: { x: n.x, y: n.y } });
   });
   data.edges.forEach(e => {
     cy.add({ group: 'edges', data: { source: e.source, target: e.target } });
@@ -270,22 +406,151 @@ function applyTopology(data, message) {
   if (message) showToast(message, 'success');
 }
 
+// ─── Topology generator helpers ────────────────────────────────────────────────
+const T = {
+  mk: (nodes, id, label, ne, x, y) => { nodes.push({ id, label, ne_type: ne, x, y }); return id; },
+  link: (edges, a, b) => edges.push({ source: a, target: b }),
+  ring: (edges, ids) => { for (let i = 0; i < ids.length; i++) edges.push({ source: ids[i], target: ids[(i + 1) % ids.length] }); },
+};
+const ACCESS_MIX  = ['BTS3900 LTE', 'BTS3900 LTE', 'BTS5900 5G', 'BTS3900 GSM', 'RRU3953'];
+const FIVEG_MIX   = ['BTS5900 5G', 'BTS5900 5G', 'BTS3900 LTE', 'RRU3953', 'Lampsite (Small Cell)'];
+const RURAL_MIX   = ['GBTS', 'BTS3900 LTE', 'GBTS', 'RTN 950 (MW)'];
+const pickMix = (mix, i) => mix[i % mix.length];
+
+// Generic radial hierarchy: cores (ring) → hubs (per core) → access star (per hub).
+function buildRadial({ cx = 1400, cy = 1400, cores, coreType, coreLabel, coreR,
+                       hubsPerCore, hubType, hubR, accessPerHub, accessR, accessMix,
+                       hubResilienceRing = false }) {
+  const nodes = [], edges = [];
+  const coreIds = [];
+  for (let c = 0; c < cores; c++) {
+    const a = cores === 1 ? 0 : (2 * Math.PI * c) / cores - Math.PI / 2;
+    const x = cores === 1 ? cx : cx + coreR * Math.cos(a);
+    const y = cores === 1 ? cy : cy + coreR * Math.sin(a);
+    coreIds.push(T.mk(nodes, `CORE-${c + 1}`, `${coreLabel} ${c + 1}`, coreType, x, y));
+  }
+  if (cores > 1) T.ring(edges, coreIds);            // core resilience ring
+  let hubN = 0;
+  for (let c = 0; c < cores; c++) {
+    const ca = cores === 1 ? 0 : (2 * Math.PI * c) / cores - Math.PI / 2;
+    const cxp = cores === 1 ? cx : cx + coreR * Math.cos(ca);
+    const cyp = cores === 1 ? cy : cy + coreR * Math.sin(ca);
+    const hubIds = [];
+    for (let h = 0; h < hubsPerCore; h++) {
+      const ha = (2 * Math.PI * h) / hubsPerCore + ca;
+      const hx = cxp + hubR * Math.cos(ha);
+      const hy = cyp + hubR * Math.sin(ha);
+      const hubId = T.mk(nodes, `AGG-${c + 1}-${h + 1}`, `AGG-${c + 1}-${h + 1}`, hubType, hx, hy);
+      hubIds.push(hubId);
+      T.link(edges, coreIds[c], hubId);
+      for (let s = 0; s < accessPerHub; s++) {
+        const sa = (2 * Math.PI * s) / accessPerHub;
+        const enbId = `ENB-${c + 1}${h + 1}${String(s + 1).padStart(2, '0')}`;
+        T.mk(nodes, enbId, enbId, pickMix(accessMix, s), hx + accessR * Math.cos(sa), hy + accessR * Math.sin(sa));
+        T.link(edges, hubId, enbId);
+      }
+      hubN++;
+    }
+    if (hubResilienceRing && hubIds.length > 2) T.ring(edges, hubIds);
+  }
+  return { nodes, edges };
+}
+
+// 1) Small-cell cluster — dense urban, one hub, macros + many small cells.
+function buildSmallCellCluster() {
+  const nodes = [], edges = [];
+  const cx = 700, cy = 600;
+  const hub = T.mk(nodes, 'AGG-1', 'Metro Hub', 'ATN 910 (Agg)', cx, cy);
+  for (let i = 0; i < 2; i++) {
+    const a = Math.PI * i;
+    T.mk(nodes, `MACRO-${i + 1}`, `MACRO-${i + 1}`, 'BTS3900 LTE', cx + 240 * Math.cos(a), cy + 240 * Math.sin(a));
+    T.link(edges, hub, `MACRO-${i + 1}`);
+  }
+  for (let s = 0; s < 12; s++) {
+    const a = (2 * Math.PI * s) / 12;
+    const r = 150 + (s % 3) * 90;
+    const id = `SC-${String(s + 1).padStart(2, '0')}`;
+    T.mk(nodes, id, id, s % 4 === 0 ? 'RRU3953' : 'Lampsite (Small Cell)', cx + r * Math.cos(a), cy + r * Math.sin(a));
+    // small cells home onto the nearest macro for backhaul
+    T.link(edges, s < 6 ? 'MACRO-1' : 'MACRO-2', id);
+  }
+  return { nodes, edges };
+}
+
+// 3) Rural microwave backhaul — chains of microwave relays feeding remote sites.
+function buildRuralMicrowave() {
+  const nodes = [], edges = [];
+  const core = T.mk(nodes, 'CORE-1', 'County Core', 'NE40E (Core)', 250, 700);
+  const branches = 3, hops = 4;
+  for (let b = 0; b < branches; b++) {
+    let prev = core;
+    const dirY = 350 + b * 350;
+    for (let h = 0; h < hops; h++) {
+      const mwId = T.mk(nodes, `MW-${b + 1}-${h + 1}`, `MW-${b + 1}-${h + 1}`, 'RTN 950 (MW)', 520 + h * 320, dirY + (h % 2 ? -80 : 80));
+      T.link(edges, prev, mwId);
+      // each relay drops one or two rural base stations
+      const leafN = (h % 2) + 1;
+      for (let l = 0; l < leafN; l++) {
+        const leaf = `RBS-${b + 1}-${h + 1}-${l + 1}`;
+        T.mk(nodes, leaf, leaf, pickMix(RURAL_MIX, h + l), 520 + h * 320 + 60, dirY + (h % 2 ? -80 : 80) + (l ? 130 : -130));
+        T.link(edges, mwId, leaf);
+      }
+      prev = mwId;
+    }
+  }
+  return { nodes, edges };
+}
+
+// 6) 5G dense urban — 5G-heavy access with LTE anchors and small cells.
+function build5GDense() {
+  return buildRadial({
+    cx: 1100, cy: 1000, cores: 1, coreType: 'CX600 (Core)', coreLabel: 'Metro Core', coreR: 0,
+    hubsPerCore: 4, hubType: 'ATN 910 (Agg)', hubR: 560, accessPerHub: 14,
+    accessR: 270, accessMix: FIVEG_MIX, hubResilienceRing: true,
+  });
+}
+
+// ─── Topology registry (dropdown order) ─────────────────────────────────────────
+const TOPOLOGIES = {
+  demo:      { label: 'BT demo — 10 real sites', build: null },   // fetched from backend
+  smallcell: { label: 'Small-cell cluster — urban (~15)', build: buildSmallCellCluster },
+  town:      { label: 'Town / district (~22)', build: () => buildRadial({
+                 cx: 800, cy: 700, cores: 1, coreType: 'NE40E (Core)', coreLabel: 'District Core', coreR: 0,
+                 hubsPerCore: 2, hubType: 'ATN 910 (Agg)', hubR: 380, accessPerHub: 9,
+                 accessR: 230, accessMix: ACCESS_MIX, hubResilienceRing: true }) },
+  rural:     { label: 'Rural microwave backhaul (~24)', build: buildRuralMicrowave },
+  city:      { label: 'City metro (~48)', build: () => buildRadial({
+                 cx: 1200, cy: 1100, cores: 1, coreType: 'NE40E (Core)', coreLabel: 'City Core', coreR: 0,
+                 hubsPerCore: 4, hubType: 'ATN 910 (Agg)', hubR: 620, accessPerHub: 11,
+                 accessR: 300, accessMix: ACCESS_MIX, hubResilienceRing: true }) },
+  fiveg:     { label: '5G dense urban (~60)', build: build5GDense },
+  zone:      { label: 'Zone / county (~80)', build: () => buildRadial({
+                 cx: 1400, cy: 1300, cores: 2, coreType: 'NE40E (Core)', coreLabel: 'Zone Core', coreR: 520,
+                 hubsPerCore: 4, hubType: 'ATN 910 (Agg)', hubR: 560, accessPerHub: 9,
+                 accessR: 260, accessMix: ACCESS_MIX, hubResilienceRing: true }) },
+  region:    { label: 'Regional RAN (~130)', build: () => buildRadial({
+                 cx: 1700, cy: 1600, cores: 3, coreType: 'NE40E (Core)', coreLabel: 'Regional Core', coreR: 780,
+                 hubsPerCore: 6, hubType: 'ATN 910 (Agg)', hubR: 640, accessPerHub: 7,
+                 accessR: 250, accessMix: ACCESS_MIX, hubResilienceRing: true }) },
+  national:  { label: 'National RAN (~210)', build: buildNationalTopology },
+};
+
 // Dispatcher for the topology dropdown
 async function loadPresetTopology(name) {
   if (!name) return;
   try {
-    if (name === 'simple') {
+    if (name === 'demo') {
       await loadDemoTopology();
-    } else if (name === 'medium') {
-      applyTopology(buildMediumTopology(), 'Medium topology loaded — 50 nodes, 5 aggregation rings');
-    } else if (name === 'national') {
-      const t = buildNationalTopology();
-      applyTopology(t, `National RAN topology loaded — ${t.nodes.length} nodes, ${t.edges.length} links`);
+    } else {
+      const spec = TOPOLOGIES[name];
+      if (spec && spec.build) {
+        const t = spec.build();
+        applyTopology(t, `${spec.label} loaded — ${t.nodes.length} nodes, ${t.edges.length} links`);
+      }
     }
   } catch (e) {
     showToast('Could not load topology: ' + e.message, 'error');
   }
-  // reset dropdown back to placeholder so the same option can be re-picked
   const sel = document.getElementById('topo-select');
   if (sel) sel.value = '';
 }
@@ -293,36 +558,7 @@ async function loadPresetTopology(name) {
 async function loadDemoTopology() {
   const res  = await fetch(`${API}/demo-topology`);
   const data = await res.json();
-  applyTopology(data, 'Demo topology loaded — 10 real BT sites');
-}
-
-// ─── Preset topology generators ────────────────────────────────────────────────
-// Medium: 5 aggregation hubs in a backbone ring, each with a star of access eNodeBs.
-function buildMediumTopology() {
-  const nodes = [], edges = [];
-  const HUBS = 5, SPOKES = 9;          // 5 hubs + 45 access = 50 nodes
-  const cx = 1000, cy0 = 1000, hubR = 620, spokeR = 300;
-  for (let h = 0; h < HUBS; h++) {
-    const ha = (2 * Math.PI * h) / HUBS - Math.PI / 2;
-    const hx = cx + hubR * Math.cos(ha);
-    const hy = cy0 + hubR * Math.sin(ha);
-    const hubId = `AGG-${h + 1}`;
-    nodes.push({ id: hubId, label: hubId, ne_type: 'ATN 910 (Agg)', x: hx, y: hy });
-    // backbone ring between hubs
-    edges.push({ source: hubId, target: `AGG-${((h + 1) % HUBS) + 1}` });
-    for (let s = 0; s < SPOKES; s++) {
-      const sa = (2 * Math.PI * s) / SPOKES;
-      const enbId = `ENB-${h + 1}${String(s + 1).padStart(2, '0')}`;
-      nodes.push({
-        id: enbId, label: enbId,
-        ne_type: s % 3 === 0 ? 'BTS3900 LTE' : (s % 3 === 1 ? 'BTS3900 GSM' : 'RRU3953'),
-        x: hx + spokeR * Math.cos(sa),
-        y: hy + spokeR * Math.sin(sa),
-      });
-      edges.push({ source: hubId, target: enbId });
-    }
-  }
-  return { nodes, edges };
+  applyTopology(data, 'BT demo topology loaded — 10 real sites');
 }
 
 // National RAN: 2 national cores → 6 regional cores (resilience ring) →
@@ -333,9 +569,8 @@ function buildNationalTopology() {
   const REGIONS = 6, METROS = 3, ACCESS = 6;
   const REGION_NAMES = ['London', 'South West', 'Midlands', 'North West', 'North East', 'Scotland'];
 
-  // National core (two geo-redundant routers, linked)
-  nodes.push({ id: 'NCORE-1', label: 'National Core 1', ne_type: 'NE40E (Core)', x: cx - 220, y: cy0 });
-  nodes.push({ id: 'NCORE-2', label: 'National Core 2', ne_type: 'NE40E (Core)', x: cx + 220, y: cy0 });
+  T.mk(nodes, 'NCORE-1', 'National Core 1', 'NE40E (Core)', cx - 220, cy0);
+  T.mk(nodes, 'NCORE-2', 'National Core 2', 'NE40E (Core)', cx + 220, cy0);
   edges.push({ source: 'NCORE-1', target: 'NCORE-2' });
 
   const regionR = 1050, metroR = 360, accessR = 150;
@@ -344,11 +579,9 @@ function buildNationalTopology() {
     const rx = cx + regionR * Math.cos(ra);
     const ry = cy0 + regionR * Math.sin(ra);
     const rcId = `RCORE-${r + 1}`;
-    nodes.push({ id: rcId, label: `${REGION_NAMES[r]} RCore`, ne_type: 'NE40E (Core)', x: rx, y: ry });
-    // dual-home each regional core to both national cores
+    T.mk(nodes, rcId, `${REGION_NAMES[r]} RCore`, 'NE40E (Core)', rx, ry);
     edges.push({ source: rcId, target: 'NCORE-1' });
     edges.push({ source: rcId, target: 'NCORE-2' });
-    // resilience ring between adjacent regional cores
     edges.push({ source: rcId, target: `RCORE-${((r + 1) % REGIONS) + 1}` });
 
     for (let m = 0; m < METROS; m++) {
@@ -356,18 +589,12 @@ function buildNationalTopology() {
       const mx = rx + metroR * Math.cos(ma);
       const my = ry + metroR * Math.sin(ma);
       const metroId = `METRO-${r + 1}-${m + 1}`;
-      nodes.push({ id: metroId, label: metroId, ne_type: 'ATN 910 (Agg)', x: mx, y: my });
+      T.mk(nodes, metroId, metroId, 'ATN 910 (Agg)', mx, my);
       edges.push({ source: rcId, target: metroId });
-
       for (let a = 0; a < ACCESS; a++) {
         const aa = (2 * Math.PI * a) / ACCESS;
         const enbId = `ENB-${r + 1}${m + 1}${String(a + 1).padStart(2, '0')}`;
-        nodes.push({
-          id: enbId, label: enbId,
-          ne_type: a % 3 === 0 ? 'BTS3900 LTE' : (a % 3 === 1 ? 'BTS3900 GSM' : 'RTN 950 (MW)'),
-          x: mx + accessR * Math.cos(aa),
-          y: my + accessR * Math.sin(aa),
-        });
+        T.mk(nodes, enbId, enbId, pickMix(ACCESS_MIX, a), mx + accessR * Math.cos(aa), my + accessR * Math.sin(aa));
         edges.push({ source: metroId, target: enbId });
       }
     }
@@ -420,6 +647,12 @@ function showNodeInfo(node) {
     e.data('source') === id ? e.data('target') : e.data('source')
   );
   document.getElementById('ni-neighbours').textContent = neighbours.join(', ') || '—';
+  const wb = document.getElementById('ni-watch-btn');
+  if (wb) {
+    const watching = watchedNode === id;
+    wb.textContent = watching ? '👁 Stop Watching' : '👁 Watch';
+    wb.classList.toggle('btn-watching', watching);
+  }
 }
 
 function hideNodeInfo() { document.getElementById('node-info').classList.add('hidden'); }
@@ -447,6 +680,12 @@ async function startSimulation() {
   rebuildTopology();
   if (topology.nodes.length === 0) {
     showToast('Load or build a topology first', 'error'); return;
+  }
+  // ns-3 LTE is CPU-bound; live simulation is practical to ~30 base stations.
+  // Larger topologies still load for design/visualisation/watch, but the live
+  // alarm stream is sparse — inject faults to drive propagation analysis.
+  if (topology.nodes.length > 35) {
+    showToast(`Large topology (${topology.nodes.length} nodes) — ns-3 live alarms will be sparse; inject faults to drive analysis`, 'info');
   }
 
   document.getElementById('btn-start').disabled = true;
@@ -575,6 +814,9 @@ function handleEvent(event) {
 
   // Update dashboard
   updateDashboard(nid, event);
+
+  // Watcher: propagation tracking for the watched node
+  trackWatch(event, nid, sev);
 }
 
 // ─── Alarm Card ───────────────────────────────────────────────────────────────
@@ -1119,6 +1361,168 @@ function showToast(msg, type = 'info') {
   t.classList.remove('hidden');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.add('hidden'), 3500);
+}
+
+// ─── Node Watcher (live alarm-propagation analysis) ─────────────────────────
+let watchedNode      = null;
+let watchNeighbours  = new Set();
+let watchData        = null;
+let watchLastSelfT   = 0;
+let neighbourLastT   = {};       // neighbourId → last alarm wall-time (s)
+let watchRenderAt    = 0;
+const WATCH_WINDOW   = 6.0;      // s — cascade correlation window
+
+function nowS() { return Date.now() / 1000; }
+
+function neighboursOf(id) {
+  return cy.edges(`[source="${id}"], [target="${id}"]`).map(e =>
+    e.data('source') === id ? e.data('target') : e.data('source'));
+}
+
+function toggleWatchSelected() {
+  if (!selectedElement || !selectedElement.isNode()) return;
+  const id = selectedElement.id();
+  if (watchedNode === id) { stopWatch(); return; }
+  watchNode(id);
+}
+
+function watchNode(id) {
+  stopWatch();
+  watchedNode = id;
+  const nbrs = neighboursOf(id);
+  watchNeighbours = new Set(nbrs);
+  watchData = { onNode: 0, sev: {}, last: [], out: {}, down: {}, up: {} };
+  watchLastSelfT = 0;
+  neighbourLastT = {};
+
+  // Canvas highlight: focus the watched node + its direct connections
+  cy.batch(() => {
+    cy.elements().addClass('dimmed');
+    const node = cy.getElementById(id);
+    node.removeClass('dimmed').addClass('watched');
+    nbrs.forEach(n => cy.getElementById(n).removeClass('dimmed').addClass('watch-neighbour'));
+    cy.edges(`[source="${id}"], [target="${id}"]`).removeClass('dimmed').addClass('watch-edge');
+  });
+  const hood = cy.getElementById(id).closedNeighborhood();
+  cy.animate({ fit: { eles: hood, padding: 80 } }, { duration: 350 });
+
+  document.getElementById('watcher-panel').classList.remove('hidden');
+  renderWatcher(true);
+  showToast(`Watching ${id} — ${nbrs.length} connections`, 'info');
+}
+
+function stopWatch() {
+  if (watchedNode) {
+    cy.elements().removeClass('watched watch-neighbour watch-edge dimmed cascade-flash');
+  }
+  watchedNode = null;
+  watchNeighbours = new Set();
+  watchData = null;
+  const p = document.getElementById('watcher-panel');
+  if (p) p.classList.add('hidden');
+  if (selectedElement && selectedElement.isNode && selectedElement.isNode()) showNodeInfo(selectedElement);
+}
+
+function flashCascadeEdge(a, b) {
+  const edge = cy.edges(`[source="${a}"][target="${b}"], [source="${b}"][target="${a}"]`);
+  if (!edge.length) return;
+  edge.addClass('cascade-flash');
+  setTimeout(() => edge.removeClass('cascade-flash').addClass('watch-edge'), 1200);
+}
+
+function trackWatch(event, nid, sev) {
+  if (!watchedNode || !watchData) return;
+  const t = nowS();
+  const name = event.alarm_name;
+  const next = event.next_alarm || 'Noalarm';
+
+  if (nid === watchedNode) {
+    watchData.onNode++;
+    watchData.sev[sev] = (watchData.sev[sev] || 0) + 1;
+    watchData.last.unshift({ name, sev, next });
+    watchData.last = watchData.last.slice(0, 8);
+    const key = name + ' ' + next;
+    watchData.out[key] = (watchData.out[key] || 0) + 1;
+    watchLastSelfT = t;
+    // Upstream: a neighbour that alarmed shortly BEFORE this node (cascade in)
+    watchNeighbours.forEach(nb => {
+      if (neighbourLastT[nb] && t - neighbourLastT[nb] <= WATCH_WINDOW) {
+        watchData.up[nb] = (watchData.up[nb] || 0) + 1;
+        flashCascadeEdge(nb, watchedNode);
+      }
+    });
+  } else if (watchNeighbours.has(nid)) {
+    neighbourLastT[nid] = t;
+    // Downstream: neighbour alarmed shortly AFTER the watched node (cascade out)
+    if (watchLastSelfT && t - watchLastSelfT <= WATCH_WINDOW) {
+      watchData.down[nid] = (watchData.down[nid] || 0) + 1;
+      flashCascadeEdge(watchedNode, nid);
+    }
+  } else {
+    return; // unrelated node — no watcher update
+  }
+
+  if (t - watchRenderAt > 0.4) { renderWatcher(); watchRenderAt = t; }
+}
+
+function sevDot(sev) {
+  const c = SEV_COLOR[sev] || '#4a5b82';
+  return `<span class="w-dot" style="background:${c}"></span>`;
+}
+
+function renderWatcher(full) {
+  if (!watchedNode) return;
+  const node = cy.getElementById(watchedNode);
+  const neType = node.length ? (node.data('ne_type') || '—') : '—';
+
+  if (full) {
+    document.getElementById('w-title').textContent = watchedNode;
+    document.getElementById('w-type').textContent = neType;
+  }
+
+  // Connections (what it is connected to)
+  const conn = [...watchNeighbours].map(nb => {
+    const nn = cy.getElementById(nb);
+    const t  = nn.length ? typeInfo(nn.data('ne_type')) : DEFAULT_TYPE;
+    const cnt = nodeAlarmCounts[nb] || 0;
+    const sv  = nodeMaxSeverity[nb];
+    return `<div class="w-conn" onclick="highlightNode('${nb}')">
+      <span class="w-cdot" style="background:${t.color}"></span>
+      <span class="w-cid">${escHtml(nb)}</span>
+      <span class="w-ctype">${escHtml(t.cat)}</span>
+      <span class="w-ccount">${sv ? sevDot(sv) : ''}${cnt}</span></div>`;
+  }).join('') || '<div class="w-empty">No connections</div>';
+  document.getElementById('w-connections').innerHTML = conn;
+
+  // Alarms on this node
+  const d = watchData;
+  const sevTxt = ['Critical', 'Major', 'Minor', 'Warning']
+    .filter(s => d.sev[s]).map(s => `${sevDot(s)}${d.sev[s]}`).join(' ') || '—';
+  document.getElementById('w-onnode').innerHTML =
+    `<div class="w-stat"><span class="w-big">${d.onNode}</span> alarms on node</div>
+     <div class="w-sevline">${sevTxt}</div>` +
+    (d.last.length ? '<div class="w-lastlist">' + d.last.map(a =>
+      `<div class="w-lastrow">${sevDot(a.sev)}<span>${escHtml(a.name)}</span></div>`).join('') + '</div>' : '');
+
+  // Propagation FROM this node (alarm → next_alarm chains)
+  const out = Object.entries(d.out).sort((a, b) => b[1] - a[1]).slice(0, 6);
+  document.getElementById('w-propagation').innerHTML = out.length ? out.map(([k, c]) => {
+    const [a, b] = k.split(' ');
+    const cls = b === 'Noalarm' ? 'w-clear' : '';
+    return `<div class="w-flow"><span class="w-fa">${escHtml(a)}</span>
+      <span class="w-arrow">──▶</span><span class="w-fb ${cls}">${escHtml(b)}</span>
+      <span class="w-fcount">×${c}</span></div>`;
+  }).join('') : '<div class="w-empty">No alarms yet on this node</div>';
+
+  // Cascades through the topology (neighbour correlations)
+  const down = Object.entries(d.down).sort((a, b) => b[1] - a[1]);
+  const up   = Object.entries(d.up).sort((a, b) => b[1] - a[1]);
+  const cascHtml =
+    `<div class="w-casc-h">↘ Propagates to (downstream)</div>` +
+    (down.length ? down.map(([n, c]) => `<div class="w-casc" onclick="highlightNode('${n}')">${escHtml(n)} <span class="w-fcount">×${c}</span></div>`).join('') : '<div class="w-empty">none observed</div>') +
+    `<div class="w-casc-h">↖ Triggered by (upstream)</div>` +
+    (up.length ? up.map(([n, c]) => `<div class="w-casc" onclick="highlightNode('${n}')">${escHtml(n)} <span class="w-fcount">×${c}</span></div>`).join('') : '<div class="w-empty">none observed</div>');
+  document.getElementById('w-cascades').innerHTML = cascHtml;
 }
 
 // ─── Network Analytics ──────────────────────────────────────────────────────

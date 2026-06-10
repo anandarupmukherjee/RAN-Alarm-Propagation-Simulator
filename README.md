@@ -104,6 +104,30 @@ test_dataset.csv             Small sample of the alarm schema (used by the backe
 
 ---
 
+## Topology editor & analysis
+
+- **Realistic preset topologies** (`Load topology…`) spanning scales from a small-cell
+  cluster (~15) → town → rural microwave backhaul → city metro → 5G dense urban → zone →
+  region → national RAN (~210), each with proper core/aggregation/access tiers and
+  resilience rings.
+- **Node types** are rendered by shape + colour (core router, aggregation, eNodeB,
+  gNodeB, GSM, microwave relay, small cell); a legend is shown on the canvas. Severity is
+  the border ring, so role and health are both visible. Adding a node prompts for a
+  **name and type**.
+- **Node watcher** — select a node and click **👁 Watch** to place a watcher. The canvas
+  focuses the node and its direct connections, and a live panel shows: what it is
+  connected to, the alarms occurring on it, how alarms **propagate from it**
+  (`alarm ▶ next_alarm` chains), and **cascades** to/from neighbours (correlated alarms
+  flash along the links).
+
+> **ns-3 scale note.** The ns-3 LTE engine is CPU-bound; live simulation is practical up
+> to ~30 base stations. Larger topologies still load for design, node-type visualisation
+> and watcher analysis, but the live alarm stream is sparse — **inject faults** to drive
+> propagation. To keep large topologies feasible, X2 interfaces follow the topology edges
+> (not a full mesh) and UE counts scale down with topology size.
+
+---
+
 ## Running
 
 ```bash
