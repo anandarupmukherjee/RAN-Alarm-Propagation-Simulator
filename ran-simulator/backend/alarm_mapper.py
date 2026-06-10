@@ -31,10 +31,12 @@ EVENT_TO_ALARM_CANDIDATES: dict[str, list[str]] = {
     "random_access_problem":   ["Cell PS Service Faulty",
                                  "Cell RX Channel Interference Noise Power Unbalanced"],
     "connection_release_abnormal": ["Cell PS Service Faulty", "Cell Unavailable"],
-    # ── Transport / cascade events ────────────────────────────────────────────
+    # ── Transport events (real ns-3 S1-U / X2 link cuts) ──────────────────────
+    "cell_service_outage":     ["Cell PS Service Faulty", "Cell Unavailable"],
     "backhaul_link_failure":   ["Ethernet Link Fault", "Remote Maintenance Link Failure",
                                  "IKE Negotiation Failure"],
-    "s1_interface_failure":    ["S1 Interface Fault"],
+    "s1_interface_failure":    ["S1 Interface Fault",
+                                 "eNodeB S1 Control Plane Transmission Interruption"],
     "s1_control_plane":        ["eNodeB S1 Control Plane Transmission Interruption"],
     "sinr_drop":               ["Cell RX Channel Interference Noise Power Unbalanced"],
     "cell_interference":       ["Cell RX Channel Interference Noise Power Unbalanced",

@@ -39,14 +39,19 @@
 #include "ns3/lte-module.h"
 #include "ns3/point-to-point-module.h"
 #include "ns3/applications-module.h"
+#include "ns3/error-model.h"
+#include "ns3/packet-sink.h"
+#include "ns3/point-to-point-net-device.h"
 
 #include <csignal>
 #include <fstream>
 #include <sstream>
 #include <map>
+#include <set>
 #include <vector>
 #include <string>
 #include <cstdio>
+#include <cctype>
 #include <chrono>
 #include <thread>
 
@@ -63,6 +68,23 @@ static std::map<uint16_t, std::string>      g_cellToSite;     // ns-3 cellId →
 static std::map<std::string, Ptr<LteEnbNetDevice>> g_siteEnb; // site id → eNB device
 static std::map<uint16_t, double>           g_cellRsrpDbm;    // latest RSRP per cell (dBm)
 static std::map<uint16_t, double>           g_cellLastSinrAlarm; // last sim-time we raised an interference alarm
+
+// ── Transport-layer fault modelling (REAL ns-3 backhaul/X2 links) ───────────
+// Each eNB's S1-U backhaul and X2 links are genuine point-to-point channels.
+// A FailLink attaches a 100%-loss error model to BOTH ends so it can be cut for
+// real (actual packet loss), then healed.
+struct FailLink {
+    Ptr<RateErrorModel> e0, e1;
+    void fail() { if (e0) e0->Enable();  if (e1) e1->Enable();  }
+    void heal() { if (e0) e0->Disable(); if (e1) e1->Disable(); }
+};
+static std::map<std::string, FailLink> g_s1u;          // site → S1-U backhaul link
+static std::map<std::string, FailLink> g_x2;           // "a|b" sorted → X2 link
+static std::map<std::string, uint16_t> g_siteToCell;   // site → cellId
+static std::vector<Ptr<PacketSink>>    g_ueSink;       // per-UE downlink sink
+static std::vector<uint64_t>           g_ueImsi;       // per-UE IMSI
+static std::map<uint64_t, uint16_t>    g_servingCell;  // IMSI → serving cellId
+static std::map<std::string, double>   g_outageSnap;   // site → cell Rx bytes at fail time
 
 static std::string g_commandsFile;
 static bool        g_realtime = true;
@@ -225,6 +247,113 @@ static void CbReportRsrpSinr(uint16_t cellId, uint16_t rnti, double rsrp, double
 }
 
 // ─── Fault injection (real ns-3 effects) ────────────────────────────────────
+// Track each UE's serving cell (for per-cell throughput attribution).
+static void CbServingCell(uint64_t imsi, uint16_t cellId, uint16_t /*rnti*/)
+{
+    g_servingCell[imsi] = cellId;
+}
+
+// ─── Transport-layer faults (genuine link cuts with measured consequences) ──
+static FailLink MakeFailLink(Ptr<NetDevice> dev)
+{
+    FailLink fl;
+    Ptr<Channel> ch = dev->GetChannel();
+    if (!ch || ch->GetNDevices() < 2) return fl;
+    for (uint32_t i = 0; i < 2; i++)
+    {
+        Ptr<NetDevice> d = ch->GetDevice(i);
+        Ptr<RateErrorModel> em = CreateObject<RateErrorModel>();
+        em->SetUnit(RateErrorModel::ERROR_UNIT_PACKET);
+        em->SetRate(1.0);          // every packet errored → link fully cut when enabled
+        em->Disable();
+        d->SetAttribute("ReceiveErrorModel", PointerValue(em));
+        (i == 0 ? fl.e0 : fl.e1) = em;
+    }
+    return fl;
+}
+
+static std::string X2Key(const std::string& a, const std::string& b)
+{
+    return a < b ? a + "|" + b : b + "|" + a;
+}
+
+// Total downlink bytes delivered to the UEs currently served by `cell`.
+static double CellRxBytes(uint16_t cell)
+{
+    double sum = 0;
+    for (size_t u = 0; u < g_ueSink.size(); u++)
+    {
+        if (u >= g_ueImsi.size() || !g_ueSink[u]) continue;
+        auto sc = g_servingCell.find(g_ueImsi[u]);
+        if (sc != g_servingCell.end() && sc->second == cell)
+            sum += g_ueSink[u]->GetTotalRx();
+    }
+    return sum;
+}
+
+// Confirm a backhaul outage by measuring that no user data got through, then
+// raise the service alarm from the *observed* outage (not just the trigger).
+static void VerifyBackhaulOutage(std::string site)
+{
+    auto cit = g_siteToCell.find(site);
+    if (cit == g_siteToCell.end()) return;
+    double before = g_outageSnap.count(site) ? g_outageSnap[site] : 0.0;
+    double kbps   = (CellRxBytes(cit->second) - before) * 8.0 / 1000.0 / 2.0;  // 2s window
+    std::cerr << "[ranalarm] backhaul outage check site " << site
+              << ": measured " << kbps << " kbps to served UEs" << std::endl;
+    if (kbps < 5.0)            // no data delivered → genuine service outage
+    {
+        std::ostringstream m;
+        m << "\"observed_kbps\":" << kbps << ",\"cause\":\"backhaul_outage_confirmed\"";
+        EmitEvent("cell_service_outage", site, -80.0, m.str());
+    }
+}
+
+static void RestoreBackhaul(std::string site)
+{
+    auto it = g_s1u.find(site);
+    if (it != g_s1u.end()) it->second.heal();
+}
+static void RestoreX2(std::string key)
+{
+    auto it = g_x2.find(key);
+    if (it != g_x2.end()) it->second.heal();
+}
+
+// Cut an eNB's S1-U backhaul for real → genuine packet loss; confirm + restore.
+static void FailBackhaul(const std::string& site)
+{
+    auto it = g_s1u.find(site);
+    if (it == g_s1u.end()) return;
+    it->second.fail();
+    auto cit = g_siteToCell.find(site);
+    if (cit != g_siteToCell.end()) g_outageSnap[site] = CellRxBytes(cit->second);
+    EmitEvent("s1_interface_failure", site, -88.0, "\"cause\":\"s1u_backhaul_link_down\"");
+    Simulator::Schedule(Seconds(2.0), &VerifyBackhaulOutage, site);
+    Simulator::Schedule(Seconds(8.0), &RestoreBackhaul, site);
+}
+
+// Cut the X2 link between two eNBs for real → handovers between them genuinely
+// fail (HandoverEndError fires from ns-3, surfacing as handover_failure alarms).
+static void FailX2(const std::string& a, const std::string& b)
+{
+    std::string k = X2Key(a, b);
+    auto it = g_x2.find(k);
+    if (it == g_x2.end()) return;
+    it->second.fail();
+    EmitEvent("backhaul_link_failure", a, -85.0,
+              "\"peer\":\"" + JEsc(b) + "\",\"link\":\"x2\"");
+    Simulator::Schedule(Seconds(8.0), &RestoreX2, k);
+}
+
+static bool IsTransportFault(const std::string& s)
+{
+    std::string l; for (char c : s) l += (char)std::tolower((unsigned char)c);
+    return l.find("s1") != std::string::npos || l.find("backhaul") != std::string::npos
+        || l.find("ethernet") != std::string::npos || l.find("transport") != std::string::npos
+        || l.find("link fault") != std::string::npos || l.find("ike") != std::string::npos;
+}
+
 static void RestoreTxPower(std::string siteId)
 {
     auto it = g_siteEnb.find(siteId);
@@ -238,11 +367,20 @@ static void RestoreTxPower(std::string siteId)
 static void InjectFault(const std::string& siteId, const std::string& eventType,
                         const std::string& alarmName)
 {
-    auto it = g_siteEnb.find(siteId);
-    if (it != g_siteEnb.end())
+    // Transport-type fault → cut the REAL S1-U backhaul (genuine packet loss).
+    // Radio-type fault → black out the eNB downlink (genuine out-of-sync → RLF).
+    if (IsTransportFault(eventType) || IsTransportFault(alarmName))
     {
-        it->second->GetPhy()->SetTxPower(1.0);   // near-blackout
-        Simulator::Schedule(Seconds(5.0), &RestoreTxPower, siteId);
+        FailBackhaul(siteId);
+    }
+    else
+    {
+        auto it = g_siteEnb.find(siteId);
+        if (it != g_siteEnb.end())
+        {
+            it->second->GetPhy()->SetTxPower(1.0);   // near-blackout
+            Simulator::Schedule(Seconds(5.0), &RestoreTxPower, siteId);
+        }
     }
     // Surface the operator's intended alarm right away (manual marker).
     if (!alarmName.empty())
@@ -253,15 +391,10 @@ static void InjectFault(const std::string& siteId, const std::string& eventType,
 
 static void InjectLinkFailure(const std::string& a, const std::string& b)
 {
-    // Real effect: black out the target eNB; emit backhaul markers on both ends.
-    auto it = g_siteEnb.find(b);
-    if (it != g_siteEnb.end())
-    {
-        it->second->GetPhy()->SetTxPower(1.0);
-        Simulator::Schedule(Seconds(5.0), &RestoreTxPower, b);
-    }
-    EmitEvent("backhaul_link_failure", a, -85.0, "\"peer\":\"" + JEsc(b) + "\"");
-    EmitEvent("s1_interface_failure", b, -90.0, "\"cause\":\"backhaul_loss_from_" + JEsc(a) + "\"");
+    // Genuine ns-3 transport cuts: X2 a↔b (handovers between them really fail)
+    // and the S1-U backhaul on b (its UEs really lose service).
+    FailX2(a, b);
+    FailBackhaul(b);
 }
 
 // ─── Command + lifecycle polling (scheduled events) ─────────────────────────
@@ -474,7 +607,48 @@ int main(int argc, char* argv[])
 
     lteHelper->AddX2Interface(enbNodes);
 
+    // ── Transport layer: index the REAL backhaul (S1-U) and X2 point-to-point
+    // links so they can be genuinely cut (100% packet loss). An eNB's P2P link
+    // whose peer is another eNB is an X2 link; the one whose peer is the EPC
+    // (SGW/PGW) is its S1-U backhaul. ──
+    std::set<uint32_t> enbNodeIds;
+    std::map<uint32_t, std::string> nodeIdToSite;
+    for (uint16_t i = 0; i < numEnb; i++)
+    {
+        enbNodeIds.insert(enbNodes.Get(i)->GetId());
+        nodeIdToSite[enbNodes.Get(i)->GetId()] = g_sites[i].id;
+        g_siteToCell[g_sites[i].id] = enbDevs.Get(i)->GetObject<LteEnbNetDevice>()->GetCellId();
+    }
+    for (uint16_t i = 0; i < numEnb; i++)
+    {
+        Ptr<Node> n = enbNodes.Get(i);
+        for (uint32_t d = 0; d < n->GetNDevices(); d++)
+        {
+            Ptr<PointToPointNetDevice> p2p = DynamicCast<PointToPointNetDevice>(n->GetDevice(d));
+            if (!p2p) continue;
+            Ptr<Channel> ch = p2p->GetChannel();
+            if (!ch || ch->GetNDevices() < 2) continue;
+            Ptr<NetDevice> other = (ch->GetDevice(0) == p2p) ? ch->GetDevice(1) : ch->GetDevice(0);
+            uint32_t peerId = other->GetNode()->GetId();
+            if (enbNodeIds.count(peerId))                       // X2 link to another eNB
+            {
+                std::string k = X2Key(g_sites[i].id, nodeIdToSite[peerId]);
+                if (!g_x2.count(k)) g_x2[k] = MakeFailLink(p2p);
+            }
+            else if (!g_s1u.count(g_sites[i].id))               // S1-U backhaul to the EPC
+            {
+                g_s1u[g_sites[i].id] = MakeFailLink(p2p);
+            }
+        }
+    }
+    std::cerr << "[ranalarm] transport: " << g_s1u.size() << " S1-U backhaul links, "
+              << g_x2.size() << " X2 links indexed" << std::endl;
+
     // ── Downlink traffic so RRC connections are real and bearers active ──
+    g_ueSink.resize(numUe);
+    g_ueImsi.resize(numUe);
+    for (uint16_t u = 0; u < numUe; u++)
+        g_ueImsi[u] = ueDevs.Get(u)->GetObject<LteUeNetDevice>()->GetImsi();
     uint16_t dlPort = 10000;
     for (uint16_t u = 0; u < numUe; u++)
     {
@@ -486,6 +660,7 @@ int main(int argc, char* argv[])
         PacketSinkHelper sink("ns3::UdpSocketFactory",
                               InetSocketAddress(Ipv4Address::GetAny(), dlPort));
         ApplicationContainer sinkApp = sink.Install(ueNodes.Get(u));
+        g_ueSink[u] = DynamicCast<PacketSink>(sinkApp.Get(0));
         app.Start(MilliSeconds(300));
         sinkApp.Start(MilliSeconds(200));
     }
@@ -504,6 +679,11 @@ int main(int argc, char* argv[])
     Config::ConnectWithoutContext("/NodeList/*/DeviceList/*/ComponentCarrierMapUe/*/LteUePhy/"
                                   "ReportCurrentCellRsrpSinr",
                                   MakeCallback(&CbReportRsrpSinr));
+    // Serving-cell tracking (for per-cell backhaul-outage throughput attribution)
+    Config::ConnectWithoutContext("/NodeList/*/DeviceList/*/LteUeRrc/ConnectionEstablished",
+                                  MakeCallback(&CbServingCell));
+    Config::ConnectWithoutContext("/NodeList/*/DeviceList/*/LteUeRrc/HandoverEndOk",
+                                  MakeCallback(&CbServingCell));
 
     // ── Lifecycle: command polling + SIGTERM handling ──
     std::signal(SIGTERM, &SigHandler);

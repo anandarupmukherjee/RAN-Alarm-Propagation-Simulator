@@ -45,6 +45,8 @@ ns-3 LTE sim ──events──▶ Redis ──▶ FastAPI (enrich) ──SSE─
 
 ### Real ns-3 LTE event → alarm mapping
 
+**Radio layer** — alarms triggered by genuine LTE protocol events:
+
 | ns-3 LTE trace source            | Event              | Example alarm name(s)                              |
 |----------------------------------|--------------------|---------------------------------------------------|
 | `LteUeRrc::RadioLinkFailure`     | radio_link_failure | Radio Link Failure / Radio Signaling Link Disconnected |
@@ -54,11 +56,28 @@ ns-3 LTE sim ──events──▶ Redis ──▶ FastAPI (enrich) ──SSE─
 | `LteEnbRrc::NotifyConnectionRelease` | connection_release_abnormal | Cell PS Service Faulty                |
 | `LteUePhy::ReportCurrentCellRsrpSinr` (low SINR) | sinr_drop | Cell RX Channel Interference Noise Power Unbalanced |
 
-So the **trigger, node, timing and SINR are real ns-3**, while the alarm *vocabulary*
-(names / severities / NE types / `Next_Alarm` chains) mirrors the historical BT dataset.
+**Transport layer** — alarms triggered by genuine point-to-point link cuts. Each eNB's
+**S1-U backhaul** and **X2** interfaces are real ns-3 channels; a fault attaches a
+100%-loss error model to both ends, so packets are genuinely dropped:
 
-Fault injection (`inject` / `link-failure`) drops the target eNB's downlink power inside
-ns-3, so the resulting RLF/handover/release alarms are themselves genuine ns-3 events.
+| Modelled fault (real link cut)   | Observed consequence                | Alarm name(s)                       |
+|----------------------------------|-------------------------------------|-------------------------------------|
+| S1-U backhaul down (per eNB)     | measured 0 kbps to served UEs       | S1 Interface Fault → Cell PS Service Faulty |
+| X2 link down (eNB pair)          | handovers between them fail (`HandoverEndError`) | Remote Maintenance Link Failure / Cell PS Service Faulty |
+
+The backhaul-outage alarm (`cell_service_outage`) is only raised after the sim **measures**
+that no user-plane data reached the cell's UEs — so it reflects an observed outage, not just
+the trigger.
+
+So the **trigger, node, timing, SINR and link state are real ns-3**, while the alarm
+*vocabulary* (names / severities / NE types / `Next_Alarm` chains) mirrors the historical
+BT dataset. Radio-type injections black out the eNB downlink (→ real RLF); transport-type
+injections cut the real backhaul/X2 links.
+
+**Scope:** the radio and transport fault domains are physically grounded in ns-3. The
+remaining dataset categories (hardware, DC power, ALD/antenna-line, licensing, environment)
+are not modelled by an LTE radio simulator and are reachable only via manual injection as
+labels — ns-3 has no power bus, board, or antenna-line device to fail.
 
 The session alarm log is available at **`GET /api/alarm-log.csv`** (dataset schema).
 
