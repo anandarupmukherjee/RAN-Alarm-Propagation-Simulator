@@ -30,16 +30,37 @@ ns-3 LTE sim ──events──▶ Redis ──▶ FastAPI (enrich) ──SSE─
 
 ### Flow
 
-1. **ns-3 core** simulates an LTE RAN: eNodeBs, UEs, EPC, RF propagation and mobility.
-   Trace sources (radio-link failure, handover failure, connection establishment,
-   SINR/RSRP thresholds, S1/X2 link state) are mapped to RAN alarms calibrated against
-   the real dataset (alarm names, severities, NE types, Markov `Next_Alarm` transitions).
-2. Events are published to **Redis**.
-3. The **FastAPI backend** enriches each event into a full alarm record and streams it
-   to clients over SSE.
+1. **ns-3 core** ([`ns3-sim/ran-alarm-sim.cc`](ran-simulator/ns3-sim/ran-alarm-sim.cc))
+   simulates an LTE RAN: EPC, eNodeB base stations, UEs with mobility, RF propagation,
+   X2 handover and 3GPP radio-link-failure detection. Real LTE **trace sources** are
+   connected to alarm emitters — every alarm is triggered by a genuine ns-3 event.
+2. Events are published to **Redis** by the control server ([`sim_server.py`](ran-simulator/ns3-sim/sim_server.py)),
+   which runs the compiled ns-3 binary directly (ns-3 is mandatory — no fallback).
+3. The **FastAPI backend** enriches each event into a full alarm record — name, severity,
+   NE type and Markov `Next_Alarm` calibrated against the real dataset — and streams it to
+   clients over SSE. It also appends every alarm to a server-side log in the dataset schema.
 4. The **frontend** renders the live topology, alarm console, severity dashboard, SINR
    heatmap, and a dataset-analytics modal. Users can edit topology, inject faults, and
-   export the generated alarms as CSV in the original `RAN_data` schema.
+   export the generated alarms as CSV.
+
+### Real ns-3 LTE event → alarm mapping
+
+| ns-3 LTE trace source            | Event              | Example alarm name(s)                              |
+|----------------------------------|--------------------|---------------------------------------------------|
+| `LteUeRrc::RadioLinkFailure`     | radio_link_failure | Radio Link Failure / Radio Signaling Link Disconnected |
+| `LteUeRrc::HandoverEndError`     | handover_failure   | Cell PS Service Faulty                             |
+| `LteUeRrc::ConnectionTimeout`    | rrc_connection_timeout | Cell PS Service Faulty / Cell Unavailable      |
+| `LteUeRrc::RandomAccessError`    | random_access_problem | Cell RX Channel Interference Noise Power Unbalanced |
+| `LteEnbRrc::NotifyConnectionRelease` | connection_release_abnormal | Cell PS Service Faulty                |
+| `LteUePhy::ReportCurrentCellRsrpSinr` (low SINR) | sinr_drop | Cell RX Channel Interference Noise Power Unbalanced |
+
+So the **trigger, node, timing and SINR are real ns-3**, while the alarm *vocabulary*
+(names / severities / NE types / `Next_Alarm` chains) mirrors the historical BT dataset.
+
+Fault injection (`inject` / `link-failure`) drops the target eNB's downlink power inside
+ns-3, so the resulting RLF/handover/release alarms are themselves genuine ns-3 events.
+
+The session alarm log is available at **`GET /api/alarm-log.csv`** (dataset schema).
 
 ---
 

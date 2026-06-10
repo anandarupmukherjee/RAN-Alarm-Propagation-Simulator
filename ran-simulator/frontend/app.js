@@ -779,18 +779,18 @@ async function pollStats() {
     const ns3   = await ns3Res.json();
 
     document.getElementById('eng-nodes').textContent  = stats.node_counts ? Object.keys(stats.node_counts).length : '—';
-    document.getElementById('eng-type').textContent   = ns3.ns3_available ? 'ns-3 PHY ✓' : 'Statistical ✓';
+    document.getElementById('eng-type').textContent   = ns3.ns3_available ? 'ns-3 LTE ✓' : 'ns-3 offline';
     document.getElementById('eng-speed').textContent  = `${simSpeed}×`;
 
-    // Update ns-3 badge
+    // Update ns-3 badge (ns-3 LTE is the mandatory simulation core)
     const badge = document.getElementById('ns3-badge');
     const label = badge.querySelector('.badge-label');
     if (ns3.ns3_available) {
       badge.className = 'ns3-badge active';
-      label.textContent = 'ns-3 PHY';
+      label.textContent = 'ns-3 LTE';
     } else {
       badge.className = 'ns3-badge fallback';
-      label.textContent = 'Statistical';
+      label.textContent = 'ns-3 offline';
     }
   } catch (_) {}
 }
@@ -802,10 +802,10 @@ async function checkNs3Status() {
     const badge = document.getElementById('ns3-badge');
     if (data.ns3_available) {
       badge.className = 'ns3-badge active';
-      badge.querySelector('.badge-label').textContent = 'ns-3 PHY';
+      badge.querySelector('.badge-label').textContent = 'ns-3 LTE';
     } else if (!data.error) {
       badge.className = 'ns3-badge fallback';
-      badge.querySelector('.badge-label').textContent = 'Statistical';
+      badge.querySelector('.badge-label').textContent = 'ns-3 offline';
     }
   } catch(_) {}
 }

@@ -21,6 +21,17 @@ from typing import Optional
 # ─── Event type → candidate alarm names ──────────────────────────────────────
 # Ordered by priority; the mapper picks from these weighted by CSV frequency.
 EVENT_TO_ALARM_CANDIDATES: dict[str, list[str]] = {
+    # ── Real ns-3 LTE trace events (the simulation core) ──────────────────────
+    # These map genuine ns-3 radio-access events to the matching BT alarm names.
+    "radio_link_failure":      ["Radio Link Failure", "Radio Signaling Link Disconnected",
+                                 "Cell Unavailable"],
+    "handover_failure":        ["Cell PS Service Faulty", "Radio Signaling Link Disconnected",
+                                 "eNodeB S1 Control Plane Transmission Interruption"],
+    "rrc_connection_timeout":  ["Cell PS Service Faulty", "Cell Unavailable"],
+    "random_access_problem":   ["Cell PS Service Faulty",
+                                 "Cell RX Channel Interference Noise Power Unbalanced"],
+    "connection_release_abnormal": ["Cell PS Service Faulty", "Cell Unavailable"],
+    # ── Transport / cascade events ────────────────────────────────────────────
     "backhaul_link_failure":   ["Ethernet Link Fault", "Remote Maintenance Link Failure",
                                  "IKE Negotiation Failure"],
     "s1_interface_failure":    ["S1 Interface Fault"],

@@ -44,36 +44,38 @@ RUN ./ns3 configure \
 # Build using all available cores
 RUN ./ns3 build -j$(nproc)
 
+# ── Compile the RAN alarm simulation CORE (real ns-3 LTE scenario) ───────────
+# Incremental: reuses the cached ns-3 library build above; only this program
+# compiles. Produces /ns3/build/scratch/ns3.41-ran-alarm-sim-optimized
+COPY ran-alarm-sim.cc /ns3/scratch/ran-alarm-sim.cc
+RUN ./ns3 build ran-alarm-sim
+
 # ─────────────────────────────────────────────────────────────────────────────
-# Stage 2: Runtime image — ns-3 source + build artifacts + sim scripts
-# We keep the source because we need ./ns3 run to set Python env correctly.
+# Stage 2: Runtime image — prebuilt ns-3 tree + compiled sim core + control server
+# The ns-3 binary is run directly (no cmake at runtime). ns-3 is mandatory.
 # ─────────────────────────────────────────────────────────────────────────────
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y \
-    python3 python3-pip python3-dev \
-    # g++ + python headers needed to build the CPyCppyy extension at pip time
-    g++ \
-    # Runtime libs needed by ns-3 shared objects
-    libgsl27 libsqlite3-0 libxml2 \
+    python3 python3-pip \
+    # Runtime libs needed by the ns-3 shared objects the binary links against
+    libgsl27 libsqlite3-0 libxml2 libboost-filesystem1.74.0 \
     curl \
-    # ns-3.41 requires cppyy <= 2.4.2 — newer cppyy (3.x) uses an ORC JIT that
-    # fails to materialise ns-3's internal-linkage static initialisers.
-    && pip3 install --no-cache-dir "cppyy==2.4.2" flask redis requests \
+    && pip3 install --no-cache-dir flask redis \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy the full ns-3 tree (source + build) from builder stage
+# Copy the full ns-3 tree (source + build + compiled scratch binary) from builder
 COPY --from=builder /ns3 /ns3
 
 WORKDIR /ns3
 
-# Copy our simulation scripts
-COPY start.sh sim_server.py ran_simulation.py ./
+# Copy the control server + launcher
+COPY start.sh sim_server.py ./
 RUN chmod +x start.sh
 
-# Create shared data directory
+# Shared data directory (scenario + commands files)
 RUN mkdir -p /data
 
 EXPOSE 5000

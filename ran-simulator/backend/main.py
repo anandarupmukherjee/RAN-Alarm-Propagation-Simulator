@@ -26,7 +26,7 @@ from typing import Optional
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel
 
 from alarm_mapper   import AlarmMapper
@@ -133,6 +133,18 @@ def get_analytics():
 @app.get("/api/demo-topology")
 def get_demo_topology():
     return mapper.get_demo_topology()
+
+
+ALARM_LOG_PATH = os.getenv("ALARM_LOG_PATH", "/app/data/ns3_alarm_log.csv")
+
+@app.get("/api/alarm-log.csv")
+def download_alarm_log():
+    """Download the server-side alarm log (dataset schema) — the alarms the
+    ns-3 LTE core has produced this session, with Next_Alarm chains filled in."""
+    if not os.path.exists(ALARM_LOG_PATH):
+        raise HTTPException(status_code=404, detail="no alarm log yet")
+    return FileResponse(ALARM_LOG_PATH, media_type="text/csv",
+                        filename="ns3_alarm_log.csv")
 
 
 # ─── ns3-sim proxy helpers ────────────────────────────────────────────────────

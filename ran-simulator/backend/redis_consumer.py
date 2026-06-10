@@ -9,7 +9,9 @@ Uses BLPOP so it blocks efficiently without busy-waiting.
 """
 
 import asyncio
+import csv
 import json
+import os
 import time
 import redis.asyncio as aioredis
 from datetime import datetime, timezone
@@ -20,6 +22,72 @@ if TYPE_CHECKING:
 
 REDIS_KEY = "ns3:events"
 BLOCK_TIMEOUT = 2   # seconds to block on BLPOP before looping
+
+# Server-side alarm log (dataset schema) — a growing record of the alarms that
+# the ns-3 LTE core produced this session.
+ALARM_LOG_PATH = os.getenv("ALARM_LOG_PATH", "/app/data/ns3_alarm_log.csv")
+ALARM_LOG_COLUMNS = [
+    "Alarm Source", "Name", "Occurred On (NT)", "Severity", "Location Information",
+    "NE Type", "Hours_since_prior", "Hours_since_samealarm", "Alarm_dow",
+    "Alarm_hour", "Next_Alarm",
+]
+SENTINEL_GAP = 7200.0   # hours — "first sighting" sentinel, matches the dataset
+
+
+class AlarmLogWriter:
+    """Writes enriched alarms to a CSV in the original dataset schema.
+
+    Next_Alarm is filled the same way the source dataset was built: each row is
+    held back until the *next* alarm on the same source arrives, at which point
+    its Next_Alarm is set to that alarm's name and the row is flushed.
+    """
+
+    def __init__(self, path: str = ALARM_LOG_PATH):
+        self.path = path
+        self._last_time: dict[str, datetime] = {}            # source → last alarm time
+        self._last_same: dict[tuple[str, str], datetime] = {}  # (source,name) → last time
+        self._pending: dict[str, dict] = {}                  # source → row awaiting Next_Alarm
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        # Truncate + header at session start
+        with open(self.path, "w", newline="") as f:
+            csv.writer(f).writerow(ALARM_LOG_COLUMNS)
+
+    def _flush(self, row: dict):
+        with open(self.path, "a", newline="") as f:
+            csv.writer(f).writerow([row[c] for c in ALARM_LOG_COLUMNS])
+
+    def record(self, alarm: dict, ts: datetime):
+        src  = str(alarm["alarm_source"])
+        name = alarm["alarm_name"]
+
+        prior = self._last_time.get(src)
+        hours_prior = round((ts - prior).total_seconds() / 3600.0, 4) if prior else SENTINEL_GAP
+        same = self._last_same.get((src, name))
+        hours_same = round((ts - same).total_seconds() / 3600.0, 4) if same else SENTINEL_GAP
+
+        row = {
+            "Alarm Source":          src,
+            "Name":                  name,
+            "Occurred On (NT)":      ts.strftime("%Y/%m/%d %H:%M"),
+            "Severity":              alarm["severity"],
+            "Location Information":  alarm["location"],
+            "NE Type":               alarm["ne_type"],
+            "Hours_since_prior":     hours_prior,
+            "Hours_since_samealarm": hours_same,
+            "Alarm_dow":             ts.weekday(),
+            "Alarm_hour":            ts.hour,
+            "Next_Alarm":            "Noalarm",   # provisional; updated when next arrives
+        }
+
+        # Finalise the previous row for this source with the real next alarm.
+        prev = self._pending.get(src)
+        if prev is not None:
+            prev["Next_Alarm"] = name
+            self._flush(prev)
+        self._pending[src] = row
+
+        self._last_time[src] = ts
+        self._last_same[(src, name)] = ts
 
 
 class RedisConsumer:
@@ -35,6 +103,7 @@ class RedisConsumer:
         self._node_counts: dict[str, dict[str, int]] = {}  # session_id → {node_id: count}
         self._running = False
         self._task: asyncio.Task | None = None
+        self._log = AlarmLogWriter()
 
     # ── Session management ────────────────────────────────────────────────────
     def register_session(self, session_id: str, queue: asyncio.Queue):
@@ -87,8 +156,15 @@ class RedisConsumer:
                 continue
 
             # Build the SSE payload
-            now_iso = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(timezone.utc)
+            now_iso = now.isoformat()
             node_id = alarm["alarm_source"]
+
+            # Append to the server-side dataset-schema alarm log.
+            try:
+                self._log.record(alarm, now)
+            except Exception as ex:
+                print(f"[consumer] alarm-log write error: {ex}", flush=True)
 
             payload = {
                 "type":         "alarm",
