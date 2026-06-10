@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>RAN Network Simulator — BT Alarm Emulator</title>
+  <meta name="description" content="Real-time RAN radio access network alarm emulator with ns-3 LTE simulation and interactive topology editor."/>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+
+  <!-- Cytoscape.js (topology) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
+
+  <!-- Chart.js (dashboard charts) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════ TOP BAR ═══════════════════════════ -->
+<header class="topbar" id="topbar">
+  <div class="topbar-left">
+    <div class="logo">
+      <span class="logo-icon">📡</span>
+      <span class="logo-text">RAN<span class="logo-accent">SIM</span></span>
+    </div>
+    <div class="ns3-badge" id="ns3-badge" title="Simulation engine status">
+      <span class="badge-dot"></span>
+      <span class="badge-label">ns-3 LTE</span>
+    </div>
+  </div>
+
+  <div class="topbar-controls">
+    <button class="btn btn-primary" id="btn-start" onclick="startSimulation()">
+      <span>▶</span> Start Simulation
+    </button>
+    <button class="btn btn-danger" id="btn-stop" onclick="stopSimulation()" disabled>
+      <span>■</span> Stop
+    </button>
+
+    <div class="separator"></div>
+
+    <button class="btn btn-secondary" id="btn-inject" onclick="openInjectModal()" disabled>
+      ⚡ Inject Fault
+    </button>
+    <button class="btn btn-secondary" id="btn-random" onclick="injectRandomFault()" disabled>
+      🎲 Random
+    </button>
+    <button class="btn btn-secondary" id="btn-analytics" onclick="openAnalytics()"
+            title="Network insights from the historical RAN dataset">
+      📊 Insights
+    </button>
+
+    <div class="separator"></div>
+
+    <div class="speed-control">
+      <label class="speed-label">Speed</label>
+      <input type="range" id="speed-slider" min="1" max="3600" value="60" step="1"
+             oninput="updateSpeed(this.value)" class="slider"/>
+      <span class="speed-value" id="speed-value">60×</span>
+    </div>
+  </div>
+
+  <div class="topbar-stats">
+    <div class="tstat">
+      <span class="tstat-value" id="stat-total">0</span>
+      <span class="tstat-label">Alarms</span>
+    </div>
+    <div class="tstat tstat-critical">
+      <span class="tstat-value" id="stat-critical">0</span>
+      <span class="tstat-label">Critical</span>
+    </div>
+    <div class="tstat tstat-major">
+      <span class="tstat-value" id="stat-major">0</span>
+      <span class="tstat-label">Major</span>
+    </div>
+    <div class="tstat">
+      <span class="tstat-value" id="sim-time">0h</span>
+      <span class="tstat-label">Sim Time</span>
+    </div>
+  </div>
+</header>
+
+<!-- ═══════════════════════════════════════ MAIN LAYOUT ══════════════════════ -->
+<main class="main-layout">
+
+  <!-- ─────────────────────────── LEFT: Topology Editor ────────────────────── -->
+  <aside class="panel topology-panel" id="topology-panel">
+    <div class="panel-header">
+      <h2 class="panel-title">Network Topology</h2>
+      <div class="panel-toolbar">
+        <button id="mode-select"   class="tool-btn active" onclick="setMode('select')"   title="Select / Move (Esc)">⬆</button>
+        <button id="mode-addnode"  class="tool-btn"        onclick="setMode('addNode')"  title="Add eNodeB (N)">＋</button>
+        <button id="mode-addedge"  class="tool-btn"        onclick="setMode('addEdge')"  title="Add Link (L)">↔</button>
+        <button id="mode-delete"   class="tool-btn"        onclick="deleteSelected()"    title="Delete selected (Del)">🗑</button>
+        <div class="toolbar-sep"></div>
+        <select id="topo-select" class="topo-select" onchange="loadPresetTopology(this.value)" title="Load a demo topology">
+          <option value="">Demo topology…</option>
+          <option value="simple">Simple — 10 BT sites</option>
+          <option value="medium">Medium — 50 nodes</option>
+          <option value="national">National RAN — complex</option>
+        </select>
+        <button class="tool-btn tool-btn-danger" onclick="clearTopology()"               title="Clear all nodes">Clear</button>
+      </div>
+    </div>
+
+    <!-- Mode hint banner -->
+    <div class="mode-hint" id="mode-hint">Select or drag nodes. Use toolbar to add nodes/links.</div>
+
+    <!-- Cytoscape canvas -->
+    <div id="cy" class="cy-container"></div>
+
+    <!-- Node info panel (appears when node selected) -->
+    <div class="node-info hidden" id="node-info">
+      <div class="node-info-header">
+        <span class="node-info-id" id="ni-id">—</span>
+        <span class="node-info-type" id="ni-type">—</span>
+      </div>
+      <div class="node-info-body">
+        <div class="ni-row"><span>Alarms</span><span id="ni-alarms">0</span></div>
+        <div class="ni-row"><span>SINR</span><span id="ni-sinr">—</span></div>
+        <div class="ni-row"><span>Last Alarm</span><span id="ni-last" class="ni-alarm">—</span></div>
+        <div class="ni-row"><span>Neighbours</span><span id="ni-neighbours">—</span></div>
+      </div>
+      <div class="node-info-actions">
+        <button class="btn btn-sm btn-secondary" onclick="injectOnSelected()">⚡ Inject</button>
+        <button class="btn btn-sm btn-danger"    onclick="injectLinkFailure()">🔗 Fail Link</button>
+      </div>
+    </div>
+
+    <!-- Edge info panel -->
+    <div class="edge-info hidden" id="edge-info">
+      <div class="edge-info-header">Link: <span id="ei-label">—</span></div>
+      <div class="ni-row"><span>Status</span><span id="ei-status" class="badge-ok">OK</span></div>
+      <button class="btn btn-sm btn-danger" onclick="failSelectedEdge()">💥 Fail this link</button>
+    </div>
+  </aside>
+
+  <!-- ─────────────────────────── CENTER: Alarm Console ────────────────────── -->
+  <section class="panel alarm-panel" id="alarm-panel">
+    <div class="panel-header">
+      <h2 class="panel-title">Live Alarm Console</h2>
+      <div class="panel-toolbar">
+        <!-- Severity filters -->
+        <button class="filter-btn active" data-sev="all"      onclick="setSevFilter('all')">All</button>
+        <button class="filter-btn sev-c"  data-sev="Critical" onclick="setSevFilter('Critical')">Critical</button>
+        <button class="filter-btn sev-M"  data-sev="Major"    onclick="setSevFilter('Major')">Major</button>
+        <button class="filter-btn sev-m"  data-sev="Minor"    onclick="setSevFilter('Minor')">Minor</button>
+        <button class="filter-btn sev-w"  data-sev="Warning"  onclick="setSevFilter('Warning')">Warning</button>
+        <div class="toolbar-sep"></div>
+        <button class="tool-btn tool-btn-accent" id="btn-export-csv" onclick="downloadAlarmCsv()"
+                title="Download simulation alarms as CSV (RAN_data schema)">⬇ CSV</button>
+        <button class="tool-btn" id="btn-pause-console" onclick="togglePause()" title="Pause/Resume">⏸</button>
+        <button class="tool-btn" onclick="clearConsole()" title="Clear">✕</button>
+      </div>
+    </div>
+
+    <!-- Empty state -->
+    <div class="empty-state" id="empty-state">
+      <div class="empty-icon">📡</div>
+      <div class="empty-title">No alarms yet</div>
+      <div class="empty-sub">Load a topology and start the simulation</div>
+    </div>
+
+    <!-- Alarm feed -->
+    <div class="alarm-feed" id="alarm-feed"></div>
+  </section>
+
+  <!-- ─────────────────────────── RIGHT: Dashboard ─────────────────────────── -->
+  <aside class="panel dashboard-panel" id="dashboard-panel">
+    <div class="panel-header">
+      <h2 class="panel-title">Dashboard</h2>
+    </div>
+    <div class="dashboard-body">
+
+      <!-- Severity counters -->
+      <div class="metric-grid">
+        <div class="metric-card mc-critical">
+          <div class="metric-val" id="mc-critical">0</div>
+          <div class="metric-lbl">Critical</div>
+        </div>
+        <div class="metric-card mc-major">
+          <div class="metric-val" id="mc-major">0</div>
+          <div class="metric-lbl">Major</div>
+        </div>
+        <div class="metric-card mc-minor">
+          <div class="metric-val" id="mc-minor">0</div>
+          <div class="metric-lbl">Minor</div>
+        </div>
+        <div class="metric-card mc-warning">
+          <div class="metric-val" id="mc-warning">0</div>
+          <div class="metric-lbl">Warning</div>
+        </div>
+      </div>
+
+      <!-- ns-3 Engine status -->
+      <div class="section-title">Simulation Engine</div>
+      <div class="engine-card" id="engine-card">
+        <div class="engine-row">
+          <span>Engine</span>
+          <span class="engine-val" id="eng-type">—</span>
+        </div>
+        <div class="engine-row">
+          <span>Speed</span>
+          <span class="engine-val" id="eng-speed">—</span>
+        </div>
+        <div class="engine-row">
+          <span>Sim Time</span>
+          <span class="engine-val" id="eng-simtime">0h</span>
+        </div>
+        <div class="engine-row">
+          <span>Nodes</span>
+          <span class="engine-val" id="eng-nodes">0</span>
+        </div>
+      </div>
+
+      <!-- Node health grid -->
+      <div class="section-title">Node Health</div>
+      <div class="node-health-grid" id="node-health-grid">
+        <div class="health-empty">No nodes — load topology first</div>
+      </div>
+
+      <!-- Alarm type chart -->
+      <div class="section-title">Top Alarm Types</div>
+      <div class="chart-container">
+        <canvas id="alarm-type-chart"></canvas>
+      </div>
+
+      <!-- SINR heatmap -->
+      <div class="section-title">SINR per Node (dBm)</div>
+      <div class="sinr-grid" id="sinr-grid"></div>
+
+    </div>
+  </aside>
+</main>
+
+<!-- ═══════════════════════════ INJECT ALARM MODAL ═══════════════════════════ -->
+<div class="modal-overlay hidden" id="inject-overlay" onclick="closeInjectModal()"></div>
+<div class="modal hidden" id="inject-modal">
+  <div class="modal-header">
+    <h3>⚡ Inject Fault</h3>
+    <button class="modal-close" onclick="closeInjectModal()">✕</button>
+  </div>
+  <div class="modal-body">
+    <div class="form-group">
+      <label class="form-label" for="inj-node">Target Node</label>
+      <select id="inj-node" class="form-select">
+        <option value="">— select node —</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="inj-category">Alarm Category</label>
+      <select id="inj-category" class="form-select" onchange="onInjectCategoryChange()">
+        <option value="">Loading…</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="inj-sevfilter">Severity</label>
+      <select id="inj-sevfilter" class="form-select" onchange="onInjectCategoryChange()">
+        <option value="">Any severity</option>
+        <option value="Critical">Critical</option>
+        <option value="Major">Major</option>
+        <option value="Minor">Minor</option>
+        <option value="Warning">Warning</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="inj-alarm">Alarm Type <span id="inj-alarm-count" class="form-hint"></span></label>
+      <select id="inj-alarm" class="form-select" onchange="updateAlarmPreview()"></select>
+    </div>
+    <div class="alarm-preview" id="alarm-preview">
+      Injecting: <strong id="preview-name">—</strong>
+      <span class="severity-badge" id="preview-sev">—</span>
+    </div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-secondary" onclick="closeInjectModal()">Cancel</button>
+    <button class="btn btn-primary"   onclick="confirmInject()">⚡ Inject</button>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ LINK FAILURE MODAL ═══════════════════════════ -->
+<div class="modal-overlay hidden" id="link-overlay" onclick="closeLinkModal()"></div>
+<div class="modal hidden" id="link-modal">
+  <div class="modal-header">
+    <h3>🔗 Inject Link Failure</h3>
+    <button class="modal-close" onclick="closeLinkModal()">✕</button>
+  </div>
+  <div class="modal-body">
+    <div class="form-group">
+      <label class="form-label">Source Node</label>
+      <select id="lf-source" class="form-select">
+        <option value="">— select —</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Target Node</label>
+      <select id="lf-target" class="form-select">
+        <option value="">— select —</option>
+      </select>
+    </div>
+    <div class="link-note">
+      This will trigger <strong>Ethernet Link Fault → S1 Interface Fault → eNodeB S1 Control Plane Interruption</strong> cascade on connected nodes.
+    </div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-secondary" onclick="closeLinkModal()">Cancel</button>
+    <button class="btn btn-danger"    onclick="confirmLinkFailure()">💥 Fail Link</button>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ ANALYTICS MODAL ══════════════════════════════ -->
+<div class="modal-overlay hidden" id="analytics-overlay" onclick="closeAnalytics()"></div>
+<div class="modal modal-wide hidden" id="analytics-modal">
+  <div class="modal-header">
+    <h3>📊 Network Analytics</h3>
+    <span class="analytics-sub" id="analytics-meta"></span>
+    <button class="modal-close" onclick="closeAnalytics()">✕</button>
+  </div>
+
+  <div class="analytics-tabs">
+    <button class="atab active" data-tab="pathways"   onclick="showAnalyticsTab('pathways')">Propagation Pathways</button>
+    <button class="atab"        data-tab="resilience" onclick="showAnalyticsTab('resilience')">Node Resilience</button>
+    <button class="atab"        data-tab="intra"      onclick="showAnalyticsTab('intra')">Inter-Alarm Time (Node)</button>
+    <button class="atab"        data-tab="inter"      onclick="showAnalyticsTab('inter')">Cross-Node Propagation</button>
+  </div>
+
+  <div class="modal-body analytics-body">
+    <div class="analytics-loading" id="analytics-loading">Loading analytics…</div>
+    <div class="analytics-pane" id="apane-pathways"></div>
+    <div class="analytics-pane hidden" id="apane-resilience"></div>
+    <div class="analytics-pane hidden" id="apane-intra"></div>
+    <div class="analytics-pane hidden" id="apane-inter"></div>
+  </div>
+</div>
+
+<!-- Toast notification -->
+<div class="toast hidden" id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

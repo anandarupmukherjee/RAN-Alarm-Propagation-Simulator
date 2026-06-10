@@ -1,0 +1,637 @@
+{
+  "meta": {
+    "rows_analysed": 951468,
+    "alarm_types": 171,
+    "sources": 6773,
+    "ne_types": [
+      "9549",
+      "BTS3900 LTE",
+      "BTS5900 5G",
+      "GBTS"
+    ],
+    "source_file": "analysis_data.csv",
+    "holdout_excluded": "test_holdout.csv (2000 rows, never analysed)"
+  },
+  "pathways": [
+    {
+      "from": "IP PM Activation Failure",
+      "to": "gNodeB X2 Interface Fault",
+      "count": 57982,
+      "prob": 0.6717
+    },
+    {
+      "from": "gNodeB X2 Interface Fault",
+      "to": "IP PM Activation Failure",
+      "count": 52758,
+      "prob": 0.5726
+    },
+    {
+      "from": "BBU CPRI Interface Error",
+      "to": "RF Unit Maintenance Link Failure",
+      "count": 30016,
+      "prob": 0.7296
+    },
+    {
+      "from": "gNodeB X2 Interface Fault",
+      "to": "User Plane Path Fault",
+      "count": 26949,
+      "prob": 0.2925
+    },
+    {
+      "from": "OML Fault",
+      "to": "ESL Link Fault",
+      "count": 24313,
+      "prob": 0.4258
+    },
+    {
+      "from": "User Plane Path Fault",
+      "to": "gNodeB X2 Interface Fault",
+      "count": 24269,
+      "prob": 0.5759
+    },
+    {
+      "from": "RF Unit Maintenance Link Failure",
+      "to": "BBU CPRI Interface Error",
+      "count": 24092,
+      "prob": 0.4632
+    },
+    {
+      "from": "GSM Cell out of Service",
+      "to": "OML Fault",
+      "count": 22331,
+      "prob": 0.3161
+    },
+    {
+      "from": "GSM Cell out of Service",
+      "to": "ESL Link Fault",
+      "count": 21194,
+      "prob": 0.3
+    },
+    {
+      "from": "ESL Link Fault",
+      "to": "OML Fault",
+      "count": 21073,
+      "prob": 0.3743
+    },
+    {
+      "from": "Radio Signaling Link Disconnected",
+      "to": "eNodeB S1 Control Plane Transmission Interruption",
+      "count": 18715,
+      "prob": 0.4166
+    },
+    {
+      "from": "User Plane Path Fault",
+      "to": "IP PM Activation Failure",
+      "count": 15450,
+      "prob": 0.3666
+    },
+    {
+      "from": "eNodeB S1 Control Plane Transmission Interruption",
+      "to": "GSM Cell out of Service",
+      "count": 13080,
+      "prob": 0.354
+    },
+    {
+      "from": "RF Unit Maintenance Link Failure",
+      "to": "Cell Unavailable",
+      "count": 12980,
+      "prob": 0.2496
+    },
+    {
+      "from": "IP PM Activation Failure",
+      "to": "User Plane Path Fault",
+      "count": 11977,
+      "prob": 0.1387
+    },
+    {
+      "from": "Radio Signaling Link Disconnected",
+      "to": "GSM Cell out of Service",
+      "count": 10200,
+      "prob": 0.227
+    },
+    {
+      "from": "Cell Unavailable",
+      "to": "Remote Maintenance Link Failure",
+      "count": 10039,
+      "prob": 0.2076
+    },
+    {
+      "from": "Cell Unavailable",
+      "to": "GSM Cell out of Service",
+      "count": 9456,
+      "prob": 0.1955
+    },
+    {
+      "from": "ESL Link Fault",
+      "to": "IKE Negotiation Failure",
+      "count": 8730,
+      "prob": 0.1551
+    },
+    {
+      "from": "eNodeB S1 Control Plane Transmission Interruption",
+      "to": "IKE Negotiation Failure",
+      "count": 8680,
+      "prob": 0.2349
+    },
+    {
+      "from": "IKE Negotiation Failure",
+      "to": "Cell Unavailable",
+      "count": 8433,
+      "prob": 0.2002
+    },
+    {
+      "from": "OML Fault",
+      "to": "IKE Negotiation Failure",
+      "count": 8211,
+      "prob": 0.1438
+    },
+    {
+      "from": "OML Fault",
+      "to": "GSM Cell out of Service",
+      "count": 7898,
+      "prob": 0.1383
+    },
+    {
+      "from": "Cell Unavailable",
+      "to": "RF Unit Maintenance Link Failure",
+      "count": 7773,
+      "prob": 0.1607
+    },
+    {
+      "from": "ESL Link Fault",
+      "to": "GSM Cell out of Service",
+      "count": 6981,
+      "prob": 0.124
+    },
+    {
+      "from": "Cell Blocked",
+      "to": "GSM Cell Manually Blocked",
+      "count": 6345,
+      "prob": 0.3823
+    },
+    {
+      "from": "Ethernet Link Fault",
+      "to": "Radio Signaling Link Disconnected",
+      "count": 5671,
+      "prob": 0.6375
+    },
+    {
+      "from": "GSM Cell out of Service",
+      "to": "Radio Signaling Link Disconnected",
+      "count": 5636,
+      "prob": 0.0798
+    },
+    {
+      "from": "Deferred Alarm",
+      "to": "Prompt Alarm",
+      "count": 5462,
+      "prob": 0.5659
+    },
+    {
+      "from": "IKE Negotiation Failure",
+      "to": "Radio Signaling Link Disconnected",
+      "count": 5312,
+      "prob": 0.1261
+    },
+    {
+      "from": "GSM Cell out of Service",
+      "to": "Cell Unavailable",
+      "count": 5291,
+      "prob": 0.0749
+    },
+    {
+      "from": "Prompt Alarm",
+      "to": "Deferred Alarm",
+      "count": 5163,
+      "prob": 0.669
+    },
+    {
+      "from": "IKE Negotiation Failure",
+      "to": "Remote Maintenance Link Failure",
+      "count": 4833,
+      "prob": 0.1147
+    },
+    {
+      "from": "Cell Unavailable",
+      "to": "BBU CPRI Interface Error",
+      "count": 4317,
+      "prob": 0.0893
+    },
+    {
+      "from": "BBU CPRI Interface Error",
+      "to": "Cell Unavailable",
+      "count": 4211,
+      "prob": 0.1024
+    },
+    {
+      "from": "GSM Cell Manually Blocked",
+      "to": "Cell Blocked",
+      "count": 4185,
+      "prob": 0.3742
+    },
+    {
+      "from": "IKE Negotiation Failure",
+      "to": "GSM Cell out of Service",
+      "count": 4040,
+      "prob": 0.0959
+    },
+    {
+      "from": "IKE Negotiation Failure",
+      "to": "ESL Link Fault",
+      "count": 3823,
+      "prob": 0.0908
+    },
+    {
+      "from": "GSM Cell out of Service",
+      "to": "IKE Negotiation Failure",
+      "count": 3756,
+      "prob": 0.0532
+    },
+    {
+      "from": "IKE Negotiation Failure",
+      "to": "Ethernet Link Fault",
+      "count": 3756,
+      "prob": 0.0892
+    }
+  ],
+  "clearance_rates": {
+    "PMU Internal Interface Communication Failure": 1.0,
+    "RRN Unavailable": 1.0,
+    "PPP Link Excessive Frame Error Rate": 0.6667,
+    "RF Unit Software Program Error": 0.528,
+    "Cell PS Service Faulty": 0.5109,
+    "Fan Fail": 0.5,
+    "Imminent Certificate Expiry": 0.5,
+    "RSL Alarm": 0.4545,
+    "Board Hardware Fault": 0.405,
+    "Radio Link Failure": 0.3951,
+    "S1 Interface Fault": 0.3928,
+    "SCTP Link Congestion": 0.3892,
+    "Ethernet Port Broadcast Packets Exceeding Alarm": 0.3636,
+    "RF Unit Overload": 0.3478,
+    "Power Module Abnormal": 0.3461,
+    "Board Overload": 0.3195,
+    "Automatic Version Rollback": 0.3054,
+    "Access Control": 0.2857,
+    "Automatic Certificate Update Failed": 0.2812,
+    "GPS Alarm": 0.2632
+  },
+  "resilience": {
+    "by_ne_type": [
+      {
+        "key": "BTS5900 5G",
+        "alarms": 228295,
+        "recovery_pct": 0.7,
+        "median_gap_h": 60.0,
+        "critical_pct": 0.1,
+        "resilience": 45.3,
+        "ne_type": "BTS5900 5G"
+      },
+      {
+        "key": "GBTS",
+        "alarms": 405133,
+        "recovery_pct": 8.0,
+        "median_gap_h": 9.0,
+        "critical_pct": 0.0,
+        "resilience": 27.8,
+        "ne_type": "GBTS"
+      },
+      {
+        "key": "BTS3900 LTE",
+        "alarms": 318039,
+        "recovery_pct": 7.1,
+        "median_gap_h": 8.0,
+        "critical_pct": 11.6,
+        "resilience": 24.6,
+        "ne_type": "BTS3900 LTE"
+      },
+      {
+        "key": "9549",
+        "alarms": 1,
+        "recovery_pct": 0.0,
+        "median_gap_h": 0.0,
+        "critical_pct": 0.0,
+        "resilience": 20.0,
+        "ne_type": "9549"
+      }
+    ],
+    "most_resilient": [
+      {
+        "key": "29875",
+        "alarms": 113,
+        "recovery_pct": 19.5,
+        "median_gap_h": 131.0,
+        "critical_pct": 0.9,
+        "resilience": 59.6,
+        "site": "29875"
+      },
+      {
+        "key": "17111",
+        "alarms": 100,
+        "recovery_pct": 18.0,
+        "median_gap_h": 89.0,
+        "critical_pct": 1.0,
+        "resilience": 58.8,
+        "site": "17111"
+      },
+      {
+        "key": "27525",
+        "alarms": 103,
+        "recovery_pct": 20.4,
+        "median_gap_h": 284.0,
+        "critical_pct": 6.8,
+        "resilience": 58.8,
+        "site": "27525"
+      },
+      {
+        "key": "94854",
+        "alarms": 112,
+        "recovery_pct": 18.8,
+        "median_gap_h": 76.0,
+        "critical_pct": 3.6,
+        "resilience": 58.7,
+        "site": "94854"
+      },
+      {
+        "key": "55076",
+        "alarms": 105,
+        "recovery_pct": 18.1,
+        "median_gap_h": 74.0,
+        "critical_pct": 2.9,
+        "resilience": 58.5,
+        "site": "55076"
+      },
+      {
+        "key": "96132",
+        "alarms": 104,
+        "recovery_pct": 17.3,
+        "median_gap_h": 6550.5,
+        "critical_pct": 1.0,
+        "resilience": 58.5,
+        "site": "96132"
+      },
+      {
+        "key": "96912",
+        "alarms": 106,
+        "recovery_pct": 20.8,
+        "median_gap_h": 89.0,
+        "critical_pct": 9.4,
+        "resilience": 58.5,
+        "site": "96912"
+      },
+      {
+        "key": "95018",
+        "alarms": 102,
+        "recovery_pct": 15.7,
+        "median_gap_h": 133.0,
+        "critical_pct": 0.0,
+        "resilience": 57.8,
+        "site": "95018"
+      },
+      {
+        "key": "11563",
+        "alarms": 124,
+        "recovery_pct": 17.7,
+        "median_gap_h": 86.0,
+        "critical_pct": 5.6,
+        "resilience": 57.7,
+        "site": "11563"
+      },
+      {
+        "key": "18687",
+        "alarms": 104,
+        "recovery_pct": 16.3,
+        "median_gap_h": 232.0,
+        "critical_pct": 2.9,
+        "resilience": 57.6,
+        "site": "18687"
+      },
+      {
+        "key": "63426",
+        "alarms": 109,
+        "recovery_pct": 16.5,
+        "median_gap_h": 273.0,
+        "critical_pct": 4.6,
+        "resilience": 57.3,
+        "site": "63426"
+      },
+      {
+        "key": "12912",
+        "alarms": 112,
+        "recovery_pct": 16.1,
+        "median_gap_h": 77.0,
+        "critical_pct": 5.4,
+        "resilience": 57.0,
+        "site": "12912"
+      }
+    ],
+    "least_resilient": [
+      {
+        "key": "18292",
+        "alarms": 1005,
+        "recovery_pct": 1.4,
+        "median_gap_h": 4.0,
+        "critical_pct": 20.0,
+        "resilience": 18.4,
+        "site": "18292"
+      },
+      {
+        "key": "96164",
+        "alarms": 6792,
+        "recovery_pct": 0.2,
+        "median_gap_h": 2.0,
+        "critical_pct": 11.7,
+        "resilience": 18.6,
+        "site": "96164"
+      },
+      {
+        "key": "57729",
+        "alarms": 4534,
+        "recovery_pct": 0.2,
+        "median_gap_h": 4.0,
+        "critical_pct": 15.9,
+        "resilience": 18.6,
+        "site": "57729"
+      },
+      {
+        "key": "11713",
+        "alarms": 792,
+        "recovery_pct": 1.1,
+        "median_gap_h": 2.0,
+        "critical_pct": 14.0,
+        "resilience": 18.6,
+        "site": "11713"
+      },
+      {
+        "key": "66359",
+        "alarms": 1240,
+        "recovery_pct": 1.0,
+        "median_gap_h": 3.0,
+        "critical_pct": 15.0,
+        "resilience": 18.7,
+        "site": "66359"
+      },
+      {
+        "key": "17073",
+        "alarms": 1347,
+        "recovery_pct": 0.6,
+        "median_gap_h": 4.0,
+        "critical_pct": 15.1,
+        "resilience": 18.9,
+        "site": "17073"
+      },
+      {
+        "key": "90078",
+        "alarms": 908,
+        "recovery_pct": 0.8,
+        "median_gap_h": 2.0,
+        "critical_pct": 11.3,
+        "resilience": 19.0,
+        "site": "90078"
+      },
+      {
+        "key": "25578",
+        "alarms": 1390,
+        "recovery_pct": 1.0,
+        "median_gap_h": 2.0,
+        "critical_pct": 11.2,
+        "resilience": 19.1,
+        "site": "25578"
+      },
+      {
+        "key": "19547",
+        "alarms": 2070,
+        "recovery_pct": 0.8,
+        "median_gap_h": 4.0,
+        "critical_pct": 14.8,
+        "resilience": 19.1,
+        "site": "19547"
+      },
+      {
+        "key": "17533",
+        "alarms": 835,
+        "recovery_pct": 0.7,
+        "median_gap_h": 3.0,
+        "critical_pct": 12.6,
+        "resilience": 19.1,
+        "site": "17533"
+      },
+      {
+        "key": "58338",
+        "alarms": 1362,
+        "recovery_pct": 0.3,
+        "median_gap_h": 2.0,
+        "critical_pct": 8.7,
+        "resilience": 19.2,
+        "site": "58338"
+      },
+      {
+        "key": "38241",
+        "alarms": 1101,
+        "recovery_pct": 0.3,
+        "median_gap_h": 2.0,
+        "critical_pct": 8.8,
+        "resilience": 19.2,
+        "site": "38241"
+      }
+    ],
+    "method": "Resilience index 0-100 = 50%\u00b7self-clear rate (alarm resolves to Noalarm) + 30%\u00b7median inter-alarm gap (capped 72h) + 20%\u00b7(1 \u2212 critical rate). Sites need \u2265100 alarms to rank."
+  },
+  "intra_node_timing": {
+    "stats": {
+      "n": 474762,
+      "mean_h": 410.17,
+      "median_h": 15.0,
+      "p25_h": 4.0,
+      "p75_h": 173.0,
+      "p90_h": 1268.0
+    },
+    "histogram": [
+      {
+        "bucket": "<1h",
+        "count": 0,
+        "pct": 0.0
+      },
+      {
+        "bucket": "1\u20136h",
+        "count": 159243,
+        "pct": 33.5
+      },
+      {
+        "bucket": "6\u201324h",
+        "count": 102866,
+        "pct": 21.7
+      },
+      {
+        "bucket": "1\u20137d",
+        "count": 92986,
+        "pct": 19.6
+      },
+      {
+        "bucket": "7\u201330d",
+        "count": 49738,
+        "pct": 10.5
+      },
+      {
+        "bucket": ">30d",
+        "count": 69929,
+        "pct": 14.7
+      }
+    ],
+    "by_ne_type": [
+      {
+        "ne_type": "BTS3900 LTE",
+        "median_h": 8.0,
+        "mean_h": 300.94,
+        "n": 151789
+      },
+      {
+        "ne_type": "GBTS",
+        "median_h": 9.0,
+        "mean_h": 521.38,
+        "n": 171605
+      },
+      {
+        "ne_type": "BTS5900 5G",
+        "median_h": 60.0,
+        "mean_h": 393.64,
+        "n": 151368
+      }
+    ],
+    "burst_count": 439252,
+    "first_or_long_gap_count": 37454,
+    "note": "Hours_since_prior = hours since the previous alarm on the same network element. 0 = simultaneous burst; 7200 = sentinel (first sighting / >300d)."
+  },
+  "inter_node_timing": {
+    "stats": {
+      "pairs_within_60min": 625613,
+      "median_min": 0.0,
+      "mean_min": 0.67,
+      "p90_min": 2.0,
+      "pct_inter_node_within_60min": 99.9
+    },
+    "histogram": [
+      {
+        "bucket": "<1 min",
+        "count": 404582,
+        "pct": 64.7
+      },
+      {
+        "bucket": "1\u20135 min",
+        "count": 206531,
+        "pct": 33.0
+      },
+      {
+        "bucket": "5\u201315 min",
+        "count": 13355,
+        "pct": 2.1
+      },
+      {
+        "bucket": "15\u201360 min",
+        "count": 1144,
+        "pct": 0.2
+      }
+    ],
+    "method": "Cross-node propagation is estimated from temporally-consecutive alarms on DIFFERENT network elements within 60 minutes (global time order, minute-resolution timestamps). A heuristic proxy for fault spread, not a verified causal link."
+  }
+}

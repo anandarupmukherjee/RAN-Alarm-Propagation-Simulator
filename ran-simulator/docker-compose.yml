@@ -1,0 +1,76 @@
+version: "3.9"
+
+services:
+  # ── Message bus ──────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: ran_redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── ns-3 LTE simulation engine ───────────────────────────────────────────────
+  ns3-sim:
+    build:
+      context: ./ns3-sim
+      dockerfile: Dockerfile
+    container_name: ran_ns3
+    ports:
+      - "5001:5000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ns3-data:/data
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - FLASK_PORT=5000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:5000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ── FastAPI alarm engine ──────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ran_backend
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      ns3-sim:
+        condition: service_healthy
+    volumes:
+      - ../test_dataset.csv:/data/test_dataset.csv:ro
+      - ns3-data:/ns3data
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - NS3_URL=http://ns3-sim:5000
+      - CSV_PATH=/data/test_dataset.csv
+    restart: unless-stopped
+
+  # ── Nginx / React frontend ────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: ran_frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  ns3-data:

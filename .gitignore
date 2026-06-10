@@ -1,0 +1,26 @@
+# ─── Large / private datasets (exceed GitHub limits; holdout is reserved) ───
+RAN_data.csv
+analysis_data.csv
+test_holdout.csv
+
+# ─── OS / editor cruft ───
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# ─── Python ───
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# ─── Node / frontend ───
+node_modules/
+
+# ─── ns-3 / sim runtime scratch ───
+ran-simulator/**/data/topology.json
+ran-simulator/**/data/commands.json
+*.log
