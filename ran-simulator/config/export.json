@@ -1,0 +1,41 @@
+{
+  "export": {
+    "episodes": 1,
+    "sim_seconds_per_episode": 120,
+    "topology": "demo",
+    "scenario": "clean",
+    "base_seed": 42,
+    "grace_period_s": 5,
+    "churn_holdoff_s": 4,
+    "ue_speed": 45,
+    "calendar_start": "2024-01-01T00:00:00Z",
+    "calendar_span_weeks": 8,
+    "anchor_hour_weights": null,
+    "export_dir": "exports",
+
+    "fault_schedule": {
+      "n_backhaul_cuts": 2,
+      "n_x2_cuts": 2,
+      "n_radio_blackouts": 0,
+      "window": [10, 15],
+      "duration_s": 8
+    },
+
+    "regional_power": { "cluster_size": 5, "at_sim_time": 40, "duration_s": 12 },
+    "maintenance": { "n_nodes": 2, "window_start": 20, "window_duration_s": 60, "n_burst_alarms": 6 },
+
+    "_provenance_note": "clear/ack delays are SYNTHESISED (the historical dataset has no cleared/acknowledged timestamps); per-severity log-normal in seconds, tunable below.",
+    "clear_delay_lognorm_s": {
+      "Critical": { "median": 25, "sigma": 0.7 },
+      "Major":    { "median": 60, "sigma": 0.7 },
+      "Minor":    { "median": 150, "sigma": 0.8 },
+      "Warning":  { "median": 300, "sigma": 0.8 }
+    },
+    "ack_delay_lognorm_s": {
+      "Critical": { "median": 8, "sigma": 0.8 },
+      "Major":    { "median": 20, "sigma": 0.8 },
+      "Minor":    { "median": 45, "sigma": 0.9 },
+      "Warning":  { "median": 90, "sigma": 0.9 }
+    }
+  }
+}

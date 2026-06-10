@@ -86,12 +86,25 @@ static std::vector<uint64_t>           g_ueImsi;       // per-UE IMSI
 static std::map<uint64_t, uint16_t>    g_servingCell;  // IMSI → serving cellId
 static std::map<std::string, double>   g_outageSnap;   // site → cell Rx bytes at fail time
 
+// ── Fault registry (for capture-time attribution + ground-truth export) ─────
+static std::map<std::string, std::set<std::string>> g_elementActiveFaults;     // site → active fault ids
+static std::map<std::string, std::pair<std::string,double>> g_recentRemoval;   // site → {fault id, removal sim-time}
+static double g_graceS = 5.0;          // attribution grace window after a fault is removed
+static int    g_faultSeq = 0;          // sequence for auto-generated (interactive) fault ids
+
 static std::string g_commandsFile;
 static bool        g_realtime = true;
 static double      g_enbTxPowerDbm = 43.0;
 static double      g_sinrAlarmThreshDb = 5.0;   // raise interference alarm below this SINR (dB) — cell edge
 static double      g_sinrAlarmHoldoff  = 3.0;   // min sim-seconds between interference alarms per cell
 static double      g_warmupS = 1.0;             // suppress churn alarms during initial cell acquisition
+
+// Per-(cell,event-type) rate limit. UE-level traces (RLF, release, RA error,
+// handover failure, conn timeout) fire per UE and flood during blackouts; this
+// collapses them to one alarm per cell per window so per-BS volumes stay
+// realistic (BT per-BS counts are modest), without losing fault ONSET.
+static double      g_churnHoldoff = 4.0;
+static std::map<std::pair<uint16_t, std::string>, double> g_lastTypeEmit;
 
 // True during the initial mass-attach transient (a sim artifact, not a real
 // network condition) — used to suppress connection-churn alarms at startup.
@@ -149,8 +162,43 @@ static std::string JEsc(const std::string& s)
     return o;
 }
 
+// Map a coarse emitted event_type back to the raw ns-3 trace source name, for
+// the ground-truth provenance file.
+static std::string RawTrace(const std::string& et)
+{
+    static const std::map<std::string, std::string> M = {
+        {"radio_link_failure", "RadioLinkFailure"},
+        {"handover_failure", "HandoverEndError"},
+        {"rrc_connection_timeout", "ConnectionTimeout"},
+        {"random_access_problem", "RandomAccessError"},
+        {"connection_release_abnormal", "NotifyConnectionRelease"},
+        {"sinr_drop", "LowSinr"},
+        {"cell_service_outage", "MeasuredOutage"},
+        {"s1_interface_failure", "Injected"},
+        {"backhaul_link_failure", "Injected"},
+        {"manual_injection", "Injected"},
+    };
+    auto it = M.find(et);
+    return it != M.end() ? it->second : et;
+}
+
+// Attribute an event on `site` to an active (or just-removed within grace) fault,
+// else "organic". Done at capture time using the live fault registry.
+static std::string AttributeFault(const std::string& site)
+{
+    auto a = g_elementActiveFaults.find(site);
+    if (a != g_elementActiveFaults.end() && !a->second.empty())
+        return *a->second.rbegin();
+    auto r = g_recentRemoval.find(site);
+    if (r != g_recentRemoval.end() && Simulator::Now().GetSeconds() <= r->second.second + g_graceS)
+        return r->second.first;
+    return "organic";
+}
+
 // Emit one RAN event as a JSON line consumed by sim_server → Redis → backend.
-// The schema matches what backend/alarm_mapper.AlarmMapper.map_event expects.
+// The schema matches what backend/alarm_mapper.AlarmMapper.map_event expects;
+// extra ns3_event_type / attributed_fault fields are ignored by the live path
+// and consumed by the batch exporter's provenance builder.
 static void EmitEvent(const std::string& eventType,
                       const std::string& siteId,
                       double sinrDbm,
@@ -165,7 +213,10 @@ static void EmitEvent(const std::string& eventType,
        << "\"node_id\":\"" << JEsc(siteId) << "\","
        << "\"source\":\"ns3\","
        << "\"ns3\":true,"
+       << "\"ns3_event_type\":\"" << JEsc(RawTrace(eventType)) << "\","
+       << "\"attributed_fault\":\"" << JEsc(AttributeFault(siteId)) << "\","
        << "\"sim_time\":" << (simT / 3600.0) << ","          // report in sim-hours
+       << "\"sim_seconds\":" << simT << ","
        << "\"sinr_dbm\":" << sinrDbm << ",";
     if (!alarmName.empty())
         js << "\"alarm_name\":\"" << JEsc(alarmName) << "\",";
@@ -181,9 +232,21 @@ static double SinrForCell(uint16_t cellId)
     return (it != g_cellRsrpDbm.end()) ? it->second : -75.0;
 }
 
+// Per-cell, per-type rate limit (returns false to suppress a repeat in-window).
+static bool ChurnGate(uint16_t cellId, const std::string& type)
+{
+    double now = Simulator::Now().GetSeconds();
+    auto key = std::make_pair(cellId, type);
+    auto it = g_lastTypeEmit.find(key);
+    if (it != g_lastTypeEmit.end() && now - it->second < g_churnHoldoff) return false;
+    g_lastTypeEmit[key] = now;
+    return true;
+}
+
 // ─── ns-3 LTE trace callbacks (REAL network events) ─────────────────────────
 static void CbRadioLinkFailure(uint64_t imsi, uint16_t cellId, uint16_t rnti)
 {
+    if (!ChurnGate(cellId, "radio_link_failure")) return;
     std::ostringstream m;
     m << "\"imsi\":" << imsi << ",\"cell_id\":" << cellId << ",\"rnti\":" << rnti
       << ",\"cause\":\"rlf_t310_expired\"";
@@ -192,6 +255,7 @@ static void CbRadioLinkFailure(uint64_t imsi, uint16_t cellId, uint16_t rnti)
 
 static void CbHandoverEndError(uint64_t imsi, uint16_t cellId, uint16_t rnti)
 {
+    if (!ChurnGate(cellId, "handover_failure")) return;
     std::ostringstream m;
     m << "\"imsi\":" << imsi << ",\"cell_id\":" << cellId << ",\"rnti\":" << rnti;
     EmitEvent("handover_failure", SiteForCell(cellId), SinrForCell(cellId), m.str());
@@ -199,7 +263,7 @@ static void CbHandoverEndError(uint64_t imsi, uint16_t cellId, uint16_t rnti)
 
 static void CbConnectionTimeout(uint64_t imsi, uint16_t cellId, uint16_t rnti, uint8_t /*count*/)
 {
-    if (InWarmup()) return;
+    if (InWarmup() || !ChurnGate(cellId, "rrc_connection_timeout")) return;
     std::ostringstream m;
     m << "\"imsi\":" << imsi << ",\"cell_id\":" << cellId << ",\"rnti\":" << rnti;
     EmitEvent("rrc_connection_timeout", SiteForCell(cellId), SinrForCell(cellId), m.str());
@@ -207,7 +271,7 @@ static void CbConnectionTimeout(uint64_t imsi, uint16_t cellId, uint16_t rnti, u
 
 static void CbRandomAccessError(uint64_t imsi, uint16_t cellId, uint16_t rnti)
 {
-    if (InWarmup()) return;
+    if (InWarmup() || !ChurnGate(cellId, "random_access_problem")) return;
     std::ostringstream m;
     m << "\"imsi\":" << imsi << ",\"cell_id\":" << cellId << ",\"rnti\":" << rnti;
     EmitEvent("random_access_problem", SiteForCell(cellId), SinrForCell(cellId), m.str());
@@ -215,7 +279,7 @@ static void CbRandomAccessError(uint64_t imsi, uint16_t cellId, uint16_t rnti)
 
 static void CbConnectionReleaseEnb(uint64_t imsi, uint16_t cellId, uint16_t rnti)
 {
-    if (InWarmup()) return;
+    if (InWarmup() || !ChurnGate(cellId, "connection_release_abnormal")) return;
     std::ostringstream m;
     m << "\"imsi\":" << imsi << ",\"cell_id\":" << cellId << ",\"rnti\":" << rnti
       << ",\"cause\":\"abnormal_context_release\"";
@@ -309,42 +373,80 @@ static void VerifyBackhaulOutage(std::string site)
     }
 }
 
-static void RestoreBackhaul(std::string site)
+// Emit a @@FAULT@@ ground-truth line (inject/remove of a fault with an id).
+static void EmitFault(const std::string& phase, const std::string& fid,
+                      const std::string& klass, const std::string& target)
 {
-    auto it = g_s1u.find(site);
-    if (it != g_s1u.end()) it->second.heal();
-}
-static void RestoreX2(std::string key)
-{
-    auto it = g_x2.find(key);
-    if (it != g_x2.end()) it->second.heal();
+    std::cout << "@@FAULT@@ " << phase << " " << fid << " " << klass << " "
+              << target << " " << Simulator::Now().GetSeconds() << std::endl;
 }
 
-// Cut an eNB's S1-U backhaul for real → genuine packet loss; confirm + restore.
-static void FailBackhaul(const std::string& site)
+// ── Managed fault primitives (no auto-restore; caller schedules removal) ─────
+static void DoBackhaulCut(std::string fid, std::string site)
 {
     auto it = g_s1u.find(site);
     if (it == g_s1u.end()) return;
+    g_elementActiveFaults[site].insert(fid);
     it->second.fail();
     auto cit = g_siteToCell.find(site);
     if (cit != g_siteToCell.end()) g_outageSnap[site] = CellRxBytes(cit->second);
     EmitEvent("s1_interface_failure", site, -88.0, "\"cause\":\"s1u_backhaul_link_down\"");
     Simulator::Schedule(Seconds(2.0), &VerifyBackhaulOutage, site);
-    Simulator::Schedule(Seconds(8.0), &RestoreBackhaul, site);
+}
+static void UndoBackhaulCut(std::string fid, std::string site)
+{
+    auto it = g_s1u.find(site);
+    if (it != g_s1u.end()) it->second.heal();
+    auto a = g_elementActiveFaults.find(site);
+    if (a != g_elementActiveFaults.end()) a->second.erase(fid);
+    g_recentRemoval[site] = {fid, Simulator::Now().GetSeconds()};
 }
 
-// Cut the X2 link between two eNBs for real → handovers between them genuinely
-// fail (HandoverEndError fires from ns-3, surfacing as handover_failure alarms).
-static void FailX2(const std::string& a, const std::string& b)
+static void DoX2Cut(std::string fid, std::string a, std::string b)
 {
     std::string k = X2Key(a, b);
     auto it = g_x2.find(k);
     if (it == g_x2.end()) return;
+    g_elementActiveFaults[a].insert(fid);
+    g_elementActiveFaults[b].insert(fid);
     it->second.fail();
-    EmitEvent("backhaul_link_failure", a, -85.0,
-              "\"peer\":\"" + JEsc(b) + "\",\"link\":\"x2\"");
-    Simulator::Schedule(Seconds(8.0), &RestoreX2, k);
+    EmitEvent("backhaul_link_failure", a, -85.0, "\"peer\":\"" + JEsc(b) + "\",\"link\":\"x2\"");
 }
+static void UndoX2Cut(std::string fid, std::string a, std::string b)
+{
+    std::string k = X2Key(a, b);
+    auto it = g_x2.find(k);
+    if (it != g_x2.end()) it->second.heal();
+    double now = Simulator::Now().GetSeconds();
+    auto fa = g_elementActiveFaults.find(a); if (fa != g_elementActiveFaults.end()) fa->second.erase(fid);
+    auto fb = g_elementActiveFaults.find(b); if (fb != g_elementActiveFaults.end()) fb->second.erase(fid);
+    g_recentRemoval[a] = {fid, now};
+    g_recentRemoval[b] = {fid, now};
+}
+
+static void DoRadioBlackout(std::string fid, std::string site)
+{
+    auto it = g_siteEnb.find(site);
+    if (it == g_siteEnb.end()) return;
+    g_elementActiveFaults[site].insert(fid);
+    it->second->GetPhy()->SetTxPower(1.0);   // near-blackout → out-of-sync → RLF
+}
+static void UndoRadioBlackout(std::string fid, std::string site)
+{
+    auto it = g_siteEnb.find(site);
+    if (it != g_siteEnb.end()) it->second->GetPhy()->SetTxPower(g_enbTxPowerDbm);
+    auto a = g_elementActiveFaults.find(site);
+    if (a != g_elementActiveFaults.end()) a->second.erase(fid);
+    g_recentRemoval[site] = {fid, Simulator::Now().GetSeconds()};
+}
+
+// Schedulable start/remove wrappers that also emit the @@FAULT@@ ground-truth.
+static void StartBackhaulFault(std::string fid, std::string site) { EmitFault("inject", fid, "backhaul_cut", site); DoBackhaulCut(fid, site); }
+static void RemoveBackhaulFault(std::string fid, std::string site) { UndoBackhaulCut(fid, site); EmitFault("remove", fid, "backhaul_cut", site); }
+static void StartX2Fault(std::string fid, std::string a, std::string b) { EmitFault("inject", fid, "x2_cut", a + " " + b); DoX2Cut(fid, a, b); }
+static void RemoveX2Fault(std::string fid, std::string a, std::string b) { UndoX2Cut(fid, a, b); EmitFault("remove", fid, "x2_cut", a + " " + b); }
+static void StartRadioFault(std::string fid, std::string site) { EmitFault("inject", fid, "radio_blackout", site); DoRadioBlackout(fid, site); }
+static void RemoveRadioFault(std::string fid, std::string site) { UndoRadioBlackout(fid, site); EmitFault("remove", fid, "radio_blackout", site); }
 
 static bool IsTransportFault(const std::string& s)
 {
@@ -354,35 +456,21 @@ static bool IsTransportFault(const std::string& s)
         || l.find("link fault") != std::string::npos || l.find("ike") != std::string::npos;
 }
 
-static void RestoreTxPower(std::string siteId)
-{
-    auto it = g_siteEnb.find(siteId);
-    if (it != g_siteEnb.end())
-        it->second->GetPhy()->SetTxPower(g_enbTxPowerDbm);
-}
-
-// Knock an eNB's downlink power down for a few seconds → its UEs really lose
-// the radio link (out-of-sync → RLF) and/or hand over, producing genuine ns-3
-// alarms. Optionally also emit the operator-requested alarm immediately.
+// Interactive (live UI) injection — auto-restoring, registry-integrated.
 static void InjectFault(const std::string& siteId, const std::string& eventType,
                         const std::string& alarmName)
 {
-    // Transport-type fault → cut the REAL S1-U backhaul (genuine packet loss).
-    // Radio-type fault → black out the eNB downlink (genuine out-of-sync → RLF).
+    std::string fid = "m" + std::to_string(++g_faultSeq);
     if (IsTransportFault(eventType) || IsTransportFault(alarmName))
     {
-        FailBackhaul(siteId);
+        StartBackhaulFault(fid, siteId);
+        Simulator::Schedule(Seconds(8.0), &RemoveBackhaulFault, fid, siteId);
     }
     else
     {
-        auto it = g_siteEnb.find(siteId);
-        if (it != g_siteEnb.end())
-        {
-            it->second->GetPhy()->SetTxPower(1.0);   // near-blackout
-            Simulator::Schedule(Seconds(5.0), &RestoreTxPower, siteId);
-        }
+        StartRadioFault(fid, siteId);
+        Simulator::Schedule(Seconds(5.0), &RemoveRadioFault, fid, siteId);
     }
-    // Surface the operator's intended alarm right away (manual marker).
     if (!alarmName.empty())
         EmitEvent("manual_injection", siteId, SinrForCell(0), "\"injected\":true", alarmName);
     else
@@ -391,10 +479,60 @@ static void InjectFault(const std::string& siteId, const std::string& eventType,
 
 static void InjectLinkFailure(const std::string& a, const std::string& b)
 {
-    // Genuine ns-3 transport cuts: X2 a↔b (handovers between them really fail)
-    // and the S1-U backhaul on b (its UEs really lose service).
-    FailX2(a, b);
-    FailBackhaul(b);
+    std::string fx = "m" + std::to_string(++g_faultSeq);
+    std::string fb = "m" + std::to_string(++g_faultSeq);
+    StartX2Fault(fx, a, b);
+    StartBackhaulFault(fb, b);
+    Simulator::Schedule(Seconds(8.0), &RemoveX2Fault, fx, a, b);
+    Simulator::Schedule(Seconds(8.0), &RemoveBackhaulFault, fb, b);
+}
+
+// Schedule a fault programme from a faults file (batch export). Format:
+//   inject <sim_time> <fault_id> <class> <target...>      remove <sim_time> <fault_id>
+// class ∈ {backhaul_cut, x2_cut, radio_blackout}; target = site (or "a b" for x2).
+static void ScheduleFaults(const std::string& path)
+{
+    std::ifstream f(path);
+    if (!f.good()) return;
+    std::map<std::string, std::pair<std::string, std::vector<std::string>>> defs;
+    std::vector<std::tuple<double, bool, std::string>> evs;
+    std::string line;
+    while (std::getline(f, line))
+    {
+        std::istringstream ss(line);
+        std::string op; ss >> op;
+        if (op == "inject")
+        {
+            double t; std::string fid, klass; ss >> t >> fid >> klass;
+            std::vector<std::string> tg; std::string x; while (ss >> x) tg.push_back(x);
+            defs[fid] = {klass, tg};
+            evs.push_back(std::make_tuple(t, true, fid));
+        }
+        else if (op == "remove")
+        {
+            double t; std::string fid; ss >> t >> fid;
+            evs.push_back(std::make_tuple(t, false, fid));
+        }
+    }
+    for (auto& ev : evs)
+    {
+        double t = std::get<0>(ev); bool inj = std::get<1>(ev); std::string fid = std::get<2>(ev);
+        auto d = defs.find(fid); if (d == defs.end()) continue;
+        const std::string& klass = d->second.first;
+        const std::vector<std::string>& tg = d->second.second;
+        if (inj)
+        {
+            if (klass == "backhaul_cut" && tg.size() >= 1) Simulator::Schedule(Seconds(t), &StartBackhaulFault, fid, tg[0]);
+            else if (klass == "x2_cut" && tg.size() >= 2)  Simulator::Schedule(Seconds(t), &StartX2Fault, fid, tg[0], tg[1]);
+            else if (klass == "radio_blackout" && tg.size() >= 1) Simulator::Schedule(Seconds(t), &StartRadioFault, fid, tg[0]);
+        }
+        else
+        {
+            if (klass == "backhaul_cut" && tg.size() >= 1) Simulator::Schedule(Seconds(t), &RemoveBackhaulFault, fid, tg[0]);
+            else if (klass == "x2_cut" && tg.size() >= 2)  Simulator::Schedule(Seconds(t), &RemoveX2Fault, fid, tg[0], tg[1]);
+            else if (klass == "radio_blackout" && tg.size() >= 1) Simulator::Schedule(Seconds(t), &RemoveRadioFault, fid, tg[0]);
+        }
+    }
 }
 
 // ─── Command + lifecycle polling (scheduled events) ─────────────────────────
@@ -473,6 +611,7 @@ static bool LoadScenario(const std::string& path)
         else if (kw == "UEPERENB") ss >> g_uePerEnb;
         else if (kw == "UESPEED") ss >> g_ueSpeed;
         else if (kw == "SPEED") ss >> g_speed;
+        else if (kw == "CHURNHOLDOFF") ss >> g_churnHoldoff;
         else if (kw == "REALTIME") { int r; ss >> r; g_realtime = (r != 0); }
     }
     return !g_sites.empty();
@@ -483,15 +622,25 @@ int main(int argc, char* argv[])
 {
     std::string scenarioFile = "/data/ns3_scenario.txt";
     g_commandsFile           = "/data/ns3_commands.txt";
+    std::string faultsFile   = "";       // optional scheduled-fault programme (batch)
     double simTimeS          = 3600.0;   // batch stop time (ignored-ish in realtime)
     int    realtimeFlag      = 1;
+    uint64_t seed            = 1;        // ns-3 RngRun — set per episode for determinism
 
     CommandLine cmd;
     cmd.AddValue("scenario", "Scenario file path", scenarioFile);
     cmd.AddValue("commands", "Commands file path", g_commandsFile);
+    cmd.AddValue("faults",   "Scheduled-fault programme file (batch export)", faultsFile);
     cmd.AddValue("simTime",  "Stop time (s)", simTimeS);
     cmd.AddValue("realtime", "1=realtime paced, 0=as-fast-as-possible", realtimeFlag);
+    cmd.AddValue("seed",     "ns-3 RngRun (per-episode reproducibility)", seed);
+    cmd.AddValue("grace",    "Fault attribution grace window (s)", g_graceS);
+    cmd.AddValue("churnHoldoff", "Per-cell per-type alarm rate limit (s)", g_churnHoldoff);
     cmd.Parse(argc, argv);
+
+    // Deterministic RNG per episode — must be set before any device/mobility build.
+    RngSeedManager::SetSeed(1);
+    RngSeedManager::SetRun(seed);
 
     if (!LoadScenario(scenarioFile))
     {
@@ -715,6 +864,13 @@ int main(int argc, char* argv[])
                                   MakeCallback(&CbServingCell));
     Config::ConnectWithoutContext("/NodeList/*/DeviceList/*/LteUeRrc/HandoverEndOk",
                                   MakeCallback(&CbServingCell));
+
+    // ── Scheduled fault programme (batch export) ──
+    if (!faultsFile.empty())
+    {
+        ScheduleFaults(faultsFile);
+        std::cerr << "[ranalarm] scheduled fault programme from " << faultsFile << std::endl;
+    }
 
     // ── Lifecycle: command polling + SIGTERM handling ──
     std::signal(SIGTERM, &SigHandler);

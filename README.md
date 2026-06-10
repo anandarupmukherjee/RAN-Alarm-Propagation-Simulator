@@ -81,6 +81,14 @@ labels — ns-3 has no power bus, board, or antenna-line device to fail.
 
 The session alarm log is available at **`GET /api/alarm-log.csv`** (dataset schema).
 
+### BT-comparable batch export
+
+For research use, a headless **batch exporter** produces a BT-comparable 13-field alarm log
+(`alarms.csv`) plus ground-truth companion files (fault injections, alarm provenance, causal
+edges, topology, manifest) for validation experiments — with episode/calendar placement,
+fault attribution, and `clean` / `regional_power` / `maintenance` confounder scenarios. See
+**[`ran-simulator/docs/EXPORT.md`](ran-simulator/docs/EXPORT.md)**.
+
 ---
 
 ## How it works — algorithm & engine

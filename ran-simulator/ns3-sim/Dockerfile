@@ -47,7 +47,8 @@ RUN ./ns3 build -j$(nproc)
 # ── Compile the RAN alarm simulation CORE (real ns-3 LTE scenario) ───────────
 # Incremental: reuses the cached ns-3 library build above; only this program
 # compiles. Produces /ns3/build/scratch/ns3.41-ran-alarm-sim-optimized
-COPY ran-alarm-sim.cc /ns3/scratch/ran-alarm-sim.cc
+# NOTE: build context is the ran-simulator root (see docker-compose.yml).
+COPY ns3-sim/ran-alarm-sim.cc /ns3/scratch/ran-alarm-sim.cc
 RUN ./ns3 build ran-alarm-sim
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -71,11 +72,17 @@ COPY --from=builder /ns3 /ns3
 
 WORKDIR /ns3
 
-# Copy the control server + launcher
-COPY start.sh sim_server.py ./
-RUN chmod +x start.sh
+# Copy the control server + launcher (paths are relative to the ran-simulator root)
+COPY ns3-sim/start.sh ns3-sim/sim_server.py ns3-sim/run_export.sh ./
+RUN chmod +x start.sh run_export.sh
 
-# Shared data directory (scenario + commands files)
+# Bake in the BT-comparable batch exporter + its calibration (stats-only, no pandas)
+COPY tools/batch_export.py tools/validate_export.py tools/run_pipeline_smoke.py /ns3/tools/
+COPY backend/alarm_mapper.py        /ns3/tools/alarm_mapper.py
+COPY backend/data/mapper_stats.json /ns3/tools/mapper_stats.json
+COPY config/export.json             /ns3/tools/export.json
+
+# Shared data directory (scenario + commands files; exports/ when mounted)
 RUN mkdir -p /data
 
 EXPOSE 5000

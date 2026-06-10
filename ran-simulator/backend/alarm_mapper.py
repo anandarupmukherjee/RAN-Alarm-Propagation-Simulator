@@ -14,9 +14,11 @@ using the real BT alarm dataset (test_dataset.csv) for:
 import os
 import json
 import random
-import pandas as pd
-import numpy as np
 from typing import Optional
+
+# NOTE: pandas is imported lazily (only the CSV-build path needs it). The fast
+# stats-only path (map_event + mapper_stats.json) is dependency-light so this
+# module can be reused by the batch exporter in the ns3-sim container.
 
 # ─── Event type → candidate alarm names ──────────────────────────────────────
 # Ordered by priority; the mapper picks from these weighted by CSV frequency.
@@ -132,6 +134,7 @@ class AlarmMapper:
                   f"(full dataset)", flush=True)
             return
 
+        import pandas as pd   # lazy — only the CSV-build path requires pandas
         self.df = pd.read_csv(csv_path, encoding="utf-8-sig")
         self._build_alarm_stats()
         self._build_transitions()

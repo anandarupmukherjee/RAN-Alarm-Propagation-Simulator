@@ -24,3 +24,7 @@ node_modules/
 ran-simulator/**/data/topology.json
 ran-simulator/**/data/commands.json
 *.log
+
+# ─── Batch-export output (run dirs are regenerated; ground-truth not committed) ───
+exports/
+ran-simulator/exports/

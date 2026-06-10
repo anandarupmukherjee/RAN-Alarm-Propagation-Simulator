@@ -17,8 +17,8 @@ services:
   # ── ns-3 LTE simulation engine ───────────────────────────────────────────────
   ns3-sim:
     build:
-      context: ./ns3-sim
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ns3-sim/Dockerfile
     container_name: ran_ns3
     ports:
       - "5001:5000"
