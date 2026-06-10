@@ -62,6 +62,7 @@ _start_time:  "float | None" = None
 _cmd_lock     = threading.Lock()
 _redis        = redis_lib.from_url(REDIS_URL, decode_responses=True)
 _event_count  = 0
+_sim_time_s   = 0.0          # latest ns-3 simulated time (seconds), from @@CLOCK@@
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -109,7 +110,7 @@ def _write_command(line: str):
 
 def _event_pump(proc: subprocess.Popen):
     """Read ns-3 stdout; forward '@@ALARM@@ {json}' lines to Redis, log the rest."""
-    global _event_count
+    global _event_count, _sim_time_s
     for raw in iter(proc.stdout.readline, b""):
         text = raw.decode("utf-8", errors="replace").rstrip()
         if not text:
@@ -122,6 +123,11 @@ def _event_pump(proc: subprocess.Popen):
                 _event_count += 1
             except Exception as ex:
                 print(f"[ns3] bad event line: {ex}: {payload[:120]}", flush=True)
+        elif text.startswith("@@CLOCK@@ "):
+            try:
+                _sim_time_s = float(text[len("@@CLOCK@@ "):])
+            except ValueError:
+                pass
         elif text.startswith("@@READY@@"):
             print(f"[ns3] {text}", flush=True)
         else:
@@ -133,8 +139,10 @@ def _start_sim():
     """Launch the ns-3 LTE simulation binary directly."""
     global _sim_proc, _start_time
 
+    global _sim_time_s
     if not _ns3_available():
         raise RuntimeError(f"ns-3 binary not found at {NS3_BINARY}")
+    _sim_time_s = 0.0
 
     _write_scenario()
     # Fresh commands file each run
@@ -205,6 +213,7 @@ def status():
         "edge_count":    len(_sim_config.get("edges", [])),
         "elapsed_s":     round(elapsed, 1),
         "events_emitted": _event_count,
+        "sim_time_s":    round(_sim_time_s, 1),
     })
 
 

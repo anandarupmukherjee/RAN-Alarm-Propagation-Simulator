@@ -666,3 +666,6 @@ body {
   border: 1px solid var(--border); border-radius: 5px; padding: 3px 8px; cursor: pointer;
 }
 .w-casc:hover { border-color: var(--cyan-dim); }
+
+/* Active toolbar toggle (e.g. Watch Node when watching) */
+.btn-active { background: #0a3a55 !important; border-color: var(--cyan) !important; color: #aefaff !important; }

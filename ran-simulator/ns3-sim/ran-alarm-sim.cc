@@ -91,7 +91,7 @@ static bool        g_realtime = true;
 static double      g_enbTxPowerDbm = 43.0;
 static double      g_sinrAlarmThreshDb = 5.0;   // raise interference alarm below this SINR (dB) — cell edge
 static double      g_sinrAlarmHoldoff  = 3.0;   // min sim-seconds between interference alarms per cell
-static double      g_warmupS = 3.0;             // suppress churn alarms during initial cell acquisition
+static double      g_warmupS = 1.0;             // suppress churn alarms during initial cell acquisition
 
 // True during the initial mass-attach transient (a sim artifact, not a real
 // network condition) — used to suppress connection-churn alarms at startup.
@@ -435,6 +435,16 @@ static void PollCommands()
         }
     }
 
+    // Emit a clock heartbeat (real ns-3 simulated time) so the UI shows network
+    // time advancing even when no alarms are firing. Throttled to ~1 sim-second.
+    static double lastClock = -1e9;
+    double nowS = Simulator::Now().GetSeconds();
+    if (nowS - lastClock >= 1.0)
+    {
+        lastClock = nowS;
+        std::cout << "@@CLOCK@@ " << nowS << std::endl;
+    }
+
     if (g_stopRequested)
     {
         Simulator::Stop();
@@ -565,8 +575,14 @@ int main(int argc, char* argv[])
     Ptr<ListPositionAllocator> uePos = CreateObject<ListPositionAllocator>();
     for (uint16_t i = 0; i < numUe; i++)
     {
+        // Spread UEs at varying distances (60–390 m) around their home eNB using a
+        // golden-angle spiral, so a fraction start at cell edges / coverage seams
+        // and generate interference/RLF alarms from the very first seconds.
         auto& home = g_sites[i % numEnb];
-        uePos->Add(Vector(home.x * 5.0 + (i % 5) * 20.0, home.y * 5.0 + (i % 3) * 20.0, 1.5));
+        double rr  = 60.0 + (i % 7) * 55.0;
+        double ang = i * 2.39996323;     // golden angle (rad) → even angular spread
+        uePos->Add(Vector(home.x * 5.0 + rr * std::cos(ang),
+                          home.y * 5.0 + rr * std::sin(ang), 1.5));
     }
     double pad = 150.0;
     MobilityHelper ueMob;

@@ -889,11 +889,17 @@ function updateStatBadges() {
   document.getElementById('mc-minor').textContent      = counters.Minor;
   document.getElementById('mc-warning').textContent    = counters.Warning;
 
-  const h = Math.floor(simTimeHours);
-  const m = Math.floor((simTimeHours - h) * 60);
-  const simTxt = `${h}h ${m}m`;
-  document.getElementById('sim-time').textContent   = simTxt;
-  document.getElementById('eng-simtime').textContent = simTxt;
+  document.getElementById('sim-time').textContent   = fmtSimTime(simTimeHours);
+  document.getElementById('eng-simtime').textContent = fmtSimTime(simTimeHours);
+}
+
+// Sim time is genuine ns-3 simulated network time (seconds-scale), so format
+// with seconds/minutes granularity rather than whole hours (which round to 0).
+function fmtSimTime(hours) {
+  const s = (hours || 0) * 3600;
+  if (s >= 3600) return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+  if (s >= 60)   return `${Math.floor(s / 60)}m ${Math.floor(s % 60)}s`;
+  return `${s.toFixed(1)}s`;
 }
 
 function updateDashboard(nodeId, event) {
@@ -1023,6 +1029,14 @@ async function pollStats() {
     document.getElementById('eng-nodes').textContent  = stats.node_counts ? Object.keys(stats.node_counts).length : '—';
     document.getElementById('eng-type').textContent   = ns3.ns3_available ? 'ns-3 LTE ✓' : 'ns-3 offline';
     document.getElementById('eng-speed').textContent  = `${simSpeed}×`;
+
+    // Drive sim time from the ns-3 clock heartbeat so it advances even when no
+    // alarms are firing (sparse on large/well-covered topologies).
+    if (typeof ns3.sim_time_s === 'number') {
+      simTimeHours = ns3.sim_time_s / 3600;
+      document.getElementById('sim-time').textContent    = fmtSimTime(simTimeHours);
+      document.getElementById('eng-simtime').textContent = fmtSimTime(simTimeHours);
+    }
 
     // Update ns-3 badge (ns-3 LTE is the mandatory simulation core)
     const badge = document.getElementById('ns3-badge');
@@ -1386,6 +1400,15 @@ function toggleWatchSelected() {
   watchNode(id);
 }
 
+// Top-toolbar entry point: watch the selected node, or guide the user to pick one.
+function watchFromToolbar() {
+  if (watchedNode) { stopWatch(); return; }
+  if (selectedElement && selectedElement.isNode()) { watchNode(selectedElement.id()); return; }
+  if (cy.nodes().length === 0) { showToast('Load a topology first', 'error'); return; }
+  showToast('Click a node on the map, then press Watch (or use 👁 in its info panel)', 'info');
+  setMode('select');
+}
+
 function watchNode(id) {
   stopWatch();
   watchedNode = id;
@@ -1408,7 +1431,16 @@ function watchNode(id) {
 
   document.getElementById('watcher-panel').classList.remove('hidden');
   renderWatcher(true);
+  syncWatchButtons();
   showToast(`Watching ${id} — ${nbrs.length} connections`, 'info');
+}
+
+function syncWatchButtons() {
+  const tb = document.getElementById('btn-watch');
+  if (tb) {
+    tb.textContent = watchedNode ? '👁 Stop Watching' : '👁 Watch Node';
+    tb.classList.toggle('btn-active', !!watchedNode);
+  }
 }
 
 function stopWatch() {
@@ -1420,6 +1452,7 @@ function stopWatch() {
   watchData = null;
   const p = document.getElementById('watcher-panel');
   if (p) p.classList.add('hidden');
+  syncWatchButtons();
   if (selectedElement && selectedElement.isNode && selectedElement.isNode()) showNodeInfo(selectedElement);
 }
 
