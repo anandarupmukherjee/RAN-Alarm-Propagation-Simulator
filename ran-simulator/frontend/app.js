@@ -700,12 +700,13 @@ async function startSimulation() {
     const data = await res.json();
     sessionId = data.session_id;
 
-    // Reset the export log for this fresh session
+    // Reset the export log + live analytics for this fresh session
     alarmLog = [];
     exportTruncated = false;
     lastSimBySource = {};
     lastSimBySourceName = {};
     simStartTime = new Date();
+    resetLiveAnalytics();
 
     document.getElementById('btn-stop').disabled   = false;
     document.getElementById('btn-inject').disabled = false;
@@ -817,6 +818,9 @@ function handleEvent(event) {
 
   // Watcher: propagation tracking for the watched node
   trackWatch(event, nid, sev);
+
+  // Live network analytics accumulation
+  accumulateLive(event, nid, sev);
 }
 
 // ─── Alarm Card ───────────────────────────────────────────────────────────────
@@ -1559,24 +1563,217 @@ function renderWatcher(full) {
 }
 
 // ─── Network Analytics ──────────────────────────────────────────────────────
-let analyticsData = null;
+let analyticsData   = null;     // historical dataset (lazy-loaded)
+let analyticsMode   = 'live';   // 'live' (this simulation) | 'historical' (dataset)
+
+// Live analytics accumulated from the ns-3 alarm stream this session.
+let live = null;
+function resetLiveAnalytics() {
+  live = {
+    total: 0, types: new Set(), sources: new Set(),
+    trans: {},        // fromName → { toName: count }
+    node: {},         // source → { count, clears, crit, gaps[], ne, lastT }
+    intraGaps: [],    // s — gaps between consecutive alarms on the same node
+    interGaps: [],    // s — gaps between consecutive alarms on different nodes
+    lastGlobal: null, // { src, t } — for cross-node timing
+  };
+}
+
+function accumulateLive(event, nid, sev) {
+  if (!live) resetLiveAnalytics();
+  live.total++;
+  live.types.add(event.alarm_name);
+  live.sources.add(nid);
+
+  const next = event.next_alarm || 'Noalarm';
+  (live.trans[event.alarm_name] = live.trans[event.alarm_name] || {});
+  live.trans[event.alarm_name][next] = (live.trans[event.alarm_name][next] || 0) + 1;
+
+  const n = live.node[nid] = live.node[nid] ||
+    { count: 0, clears: 0, crit: 0, gaps: [], ne: event.ne_type || '', lastT: null };
+  n.count++;
+  if (next === 'Noalarm')  n.clears++;
+  if (sev === 'Critical')  n.crit++;
+  if (event.ne_type)       n.ne = event.ne_type;
+
+  // sim_time is the global ns-3 clock (hours) → seconds; monotonic across nodes
+  const t = (typeof event.sim_time === 'number') ? event.sim_time * 3600 : null;
+  if (t != null) {
+    if (n.lastT != null) { const g = t - n.lastT; if (g >= 0 && g < 86400) { n.gaps.push(g); live.intraGaps.push(g); } }
+    n.lastT = t;
+    if (live.lastGlobal && live.lastGlobal.src !== nid) {
+      const g = t - live.lastGlobal.t; if (g >= 0 && g < 3600) live.interGaps.push(g);
+    }
+    live.lastGlobal = { src: nid, t };
+  }
+}
+
+function _median(a) { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; }
+function _pct(a, p) { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.floor(p * s.length))]; }
+function _histStats(arr, buckets) {
+  const n = arr.length || 1;
+  const histogram = buckets.map(([label, lo, hi]) => {
+    const c = arr.filter(v => v >= lo && v < hi).length;
+    return { bucket: label, count: c, pct: +(100 * c / n).toFixed(1) };
+  });
+  const mean = arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+  return {
+    histogram,
+    stats: { n: arr.length, median: +_median(arr).toFixed(2), mean: +mean.toFixed(2),
+             p25: +_pct(arr, 0.25).toFixed(2), p75: +_pct(arr, 0.75).toFixed(2), p90: +_pct(arr, 0.90).toFixed(2) },
+  };
+}
+
+// Build the live-network analytics from the accumulated stream.
+function computeLiveAnalytics() {
+  if (!live || live.total === 0) return null;
+  const resOf = (count, clears, crit, medGapH) =>
+    100 * (0.5 * (clears / count) + 0.3 * Math.min(medGapH / 72, 1) + 0.2 * (1 - crit / count));
+
+  // pathways
+  const pathways = [];
+  for (const from in live.trans) {
+    const tot = Object.values(live.trans[from]).reduce((a, b) => a + b, 0);
+    for (const to in live.trans[from]) {
+      if (to === 'Noalarm' || to === 'nan' || to === from) continue;
+      pathways.push({ from, to, count: live.trans[from][to], prob: live.trans[from][to] / tot });
+    }
+  }
+  pathways.sort((a, b) => b.count - a.count);
+
+  // resilience — by node and by NE type
+  const siteRow = (key, n) => {
+    const medGapS = _median(n.gaps);
+    return { key, alarms: n.count, recovery_pct: +(100 * n.clears / n.count).toFixed(1),
+             median_gap_s: +medGapS.toFixed(1), critical_pct: +(100 * n.crit / n.count).toFixed(1),
+             resilience: +resOf(n.count, n.clears, n.crit, medGapS / 3600).toFixed(1) };
+  };
+  const sites = Object.entries(live.node).filter(([, n]) => n.count >= 2).map(([k, n]) => siteRow(k, n));
+  sites.sort((a, b) => b.resilience - a.resilience);
+
+  const neAgg = {};
+  for (const k in live.node) {
+    const n = live.node[k], ne = n.ne || '—';
+    const e = neAgg[ne] = neAgg[ne] || { count: 0, clears: 0, crit: 0, gaps: [] };
+    e.count += n.count; e.clears += n.clears; e.crit += n.crit; e.gaps.push(...n.gaps);
+  }
+  const byNe = Object.entries(neAgg).map(([ne, e]) => ({ ...siteRow(ne, e), ne_type: ne }));
+  byNe.sort((a, b) => b.resilience - a.resilience);
+
+  const intra = _histStats(live.intraGaps, [['<1s', 0, 1], ['1–5s', 1, 5], ['5–15s', 5, 15], ['15–60s', 15, 60], ['1–5m', 60, 300], ['>5m', 300, 1e9]]);
+  const inter = _histStats(live.interGaps, [['<0.5s', 0, 0.5], ['0.5–2s', 0.5, 2], ['2–10s', 2, 10], ['10–60s', 10, 60]]);
+
+  return {
+    total: live.total, types: live.types.size, sources: live.sources.size,
+    pathways: pathways.slice(0, 40),
+    sites: { by_ne: byNe, most: sites.slice(0, 12), least: sites.slice(-12).reverse() },
+    intra, inter,
+  };
+}
 
 async function openAnalytics() {
   document.getElementById('analytics-overlay').classList.remove('hidden');
   document.getElementById('analytics-modal').classList.remove('hidden');
   showAnalyticsTab('pathways');
-  if (analyticsData) { renderAnalytics(analyticsData); return; }
-  document.getElementById('analytics-loading').classList.remove('hidden');
-  try {
-    const res = await fetch(`${API}/analytics`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    analyticsData = await res.json();
-    document.getElementById('analytics-loading').classList.add('hidden');
-    renderAnalytics(analyticsData);
-  } catch (e) {
-    document.getElementById('analytics-loading').textContent =
-      'Could not load analytics: ' + e.message;
+  // Default to the live simulation; fall back to historical if nothing collected.
+  setAnalyticsMode((live && live.total > 0) ? 'live' : analyticsMode);
+}
+
+function setAnalyticsMode(mode) {
+  analyticsMode = mode;
+  const lb = document.getElementById('amode-live'), hb = document.getElementById('amode-hist');
+  if (lb) lb.classList.toggle('active', mode === 'live');
+  if (hb) hb.classList.toggle('active', mode === 'historical');
+  document.getElementById('analytics-loading').classList.add('hidden');
+
+  if (mode === 'live') {
+    const d = computeLiveAnalytics();
+    if (!d) {
+      document.getElementById('analytics-meta').textContent = 'live simulation';
+      ['pathways', 'resilience', 'intra', 'inter'].forEach(t =>
+        document.getElementById(`apane-${t}`).innerHTML =
+          '<p class="apane-intro">No live alarms yet — start the simulation (and inject faults) to collect analytics of the running ns-3 network. Or switch to the historical dataset baseline above.</p>');
+      return;
+    }
+    renderLiveAnalytics(d);
+  } else {
+    if (analyticsData) { renderAnalytics(analyticsData); return; }
+    document.getElementById('analytics-loading').classList.remove('hidden');
+    fetch(`${API}/analytics`).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(d => { analyticsData = d; document.getElementById('analytics-loading').classList.add('hidden'); renderAnalytics(d); })
+      .catch(e => { document.getElementById('analytics-loading').textContent = 'Could not load historical analytics: ' + e.message; });
   }
+}
+
+// Render the LIVE network analytics (seconds-scale timing).
+function renderLiveAnalytics(d) {
+  document.getElementById('analytics-meta').textContent =
+    `LIVE · ${d.total.toLocaleString()} alarms · ${d.types} types · ${d.sources} nodes (this simulation)`;
+
+  // 1 — pathways
+  if (d.pathways.length) {
+    const maxC = Math.max(...d.pathways.map(p => p.count), 1);
+    document.getElementById('apane-pathways').innerHTML = `
+      <p class="apane-intro">Alarm-to-alarm transitions observed in the running ns-3 network
+      (what an alarm led to next on the same element). Probability = share of that alarm's follow-ons.</p>
+      <table class="atable"><thead><tr><th>From</th><th>→ Leads to</th><th class="num">Count</th><th class="num">P(next)</th><th class="barcol">Frequency</th></tr></thead>
+      <tbody>${d.pathways.map(p => `<tr><td>${escHtml(p.from)}</td><td class="lead">${escHtml(p.to)}</td>
+        <td class="num">${p.count.toLocaleString()}</td><td class="num">${(p.prob * 100).toFixed(1)}%</td>
+        <td>${bar(100 * p.count / maxC, 'b-cyan')}</td></tr>`).join('')}</tbody></table>`;
+  } else {
+    document.getElementById('apane-pathways').innerHTML = '<p class="apane-intro">No multi-step alarm chains observed yet.</p>';
+  }
+
+  // 2 — resilience
+  const resRow = x => `<tr><td>${escHtml(x.ne_type || x.key)}</td>
+    <td class="num">${x.alarms.toLocaleString()}</td><td class="num">${x.recovery_pct}%</td>
+    <td class="num">${x.median_gap_s}s</td><td class="num">${x.critical_pct}%</td>
+    <td class="num"><strong>${x.resilience}</strong></td>
+    <td>${bar(x.resilience, x.resilience >= 45 ? 'b-green' : x.resilience >= 30 ? 'b-amber' : 'b-red')}</td></tr>`;
+  document.getElementById('apane-resilience').innerHTML = `
+    <p class="apane-intro">Resilience index 0–100 = 50%·self-clear rate + 30%·median inter-alarm gap (capped 72h)
+    + 20%·(1 − critical rate), computed live per simulated node. Nodes need ≥2 alarms to rank.</p>
+    <div class="asubtitle">By equipment type (NE Type)</div>
+    <table class="atable"><thead><tr><th>NE Type</th><th class="num">Alarms</th><th class="num">Self-clear</th><th class="num">Med. gap</th><th class="num">Critical</th><th class="num">Index</th><th class="barcol"></th></tr></thead>
+      <tbody>${d.sites.by_ne.map(resRow).join('')}</tbody></table>
+    <div class="acols">
+      <div><div class="asubtitle b-green-t">Most resilient nodes</div>
+        <table class="atable"><thead><tr><th>Node</th><th class="num">Alarms</th><th class="num">Clear</th><th class="num">Gap</th><th class="num">Crit</th><th class="num">Idx</th><th class="barcol"></th></tr></thead>
+        <tbody>${d.sites.most.map(resRow).join('') || '<tr><td colspan="7">—</td></tr>'}</tbody></table></div>
+      <div><div class="asubtitle b-red-t">Least resilient nodes</div>
+        <table class="atable"><thead><tr><th>Node</th><th class="num">Alarms</th><th class="num">Clear</th><th class="num">Gap</th><th class="num">Crit</th><th class="num">Idx</th><th class="barcol"></th></tr></thead>
+        <tbody>${d.sites.least.map(resRow).join('') || '<tr><td colspan="7">—</td></tr>'}</tbody></table></div>
+    </div>`;
+
+  // 3 — intra-node timing (seconds)
+  const it = d.intra, s = it.stats, maxH = Math.max(...it.histogram.map(h => h.pct), 1);
+  document.getElementById('apane-intra').innerHTML = `
+    <p class="apane-intro">Time between consecutive alarms on the same node, measured in ns-3 simulated time.</p>
+    <div class="astats">
+      <div class="astat"><span>${s.median}s</span><label>Median</label></div>
+      <div class="astat"><span>${s.mean}s</span><label>Mean</label></div>
+      <div class="astat"><span>${s.p25}s</span><label>P25</label></div>
+      <div class="astat"><span>${s.p75}s</span><label>P75</label></div>
+      <div class="astat"><span>${s.p90}s</span><label>P90</label></div>
+    </div>
+    <div class="asubtitle">Distribution of gap between consecutive alarms on a node (${s.n.toLocaleString()} samples)</div>
+    ${it.histogram.map(h => `<div class="ahrow"><span class="ahlabel">${escHtml(h.bucket)}</span>
+      ${bar(100 * h.pct / maxH, 'b-cyan')}<span class="ahval">${h.pct}%</span></div>`).join('')}`;
+
+  // 4 — cross-node propagation (seconds)
+  const nt = d.inter, ns2 = nt.stats, maxN = Math.max(...nt.histogram.map(h => h.pct), 1);
+  document.getElementById('apane-inter').innerHTML = `
+    <p class="apane-intro">Time gap between temporally-consecutive alarms on <em>different</em> simulated nodes —
+    a proxy for fault spread across the live network.</p>
+    <div class="astats">
+      <div class="astat"><span>${ns2.median}s</span><label>Median</label></div>
+      <div class="astat"><span>${ns2.mean}s</span><label>Mean</label></div>
+      <div class="astat"><span>${ns2.p90}s</span><label>P90</label></div>
+      <div class="astat"><span>${ns2.n.toLocaleString()}</span><label>Pairs</label></div>
+    </div>
+    <div class="asubtitle">Cross-node alarm gap distribution</div>
+    ${nt.histogram.map(h => `<div class="ahrow"><span class="ahlabel">${escHtml(h.bucket)}</span>
+      ${bar(100 * h.pct / maxN, 'b-red')}<span class="ahval">${h.pct}%</span></div>`).join('')}`;
 }
 
 function closeAnalytics() {
@@ -1598,8 +1795,8 @@ function bar(pct, cls) {
 function renderAnalytics(d) {
   const m = d.meta || {};
   document.getElementById('analytics-meta').textContent =
-    `${(m.rows_analysed || 0).toLocaleString()} alarms · ${m.alarm_types} types · ` +
-    `${(m.sources || 0).toLocaleString()} sites · holdout excluded`;
+    `HISTORICAL DATASET · ${(m.rows_analysed || 0).toLocaleString()} alarms · ${m.alarm_types} types · ` +
+    `${(m.sources || 0).toLocaleString()} sites · calibration baseline (holdout excluded)`;
 
   // 1 ── Propagation pathways ────────────────────────────────────────────────
   const maxC = Math.max(...d.pathways.map(p => p.count), 1);

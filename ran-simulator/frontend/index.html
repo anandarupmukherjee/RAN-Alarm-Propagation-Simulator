@@ -322,6 +322,10 @@
 <div class="modal modal-wide hidden" id="analytics-modal">
   <div class="modal-header">
     <h3>📊 Network Analytics</h3>
+    <div class="analytics-mode">
+      <button class="amode active" id="amode-live" onclick="setAnalyticsMode('live')">🟢 Live simulation</button>
+      <button class="amode" id="amode-hist" onclick="setAnalyticsMode('historical')">📚 Historical dataset</button>
+    </div>
     <span class="analytics-sub" id="analytics-meta"></span>
     <button class="modal-close" onclick="closeAnalytics()">✕</button>
   </div>

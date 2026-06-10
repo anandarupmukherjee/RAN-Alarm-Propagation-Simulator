@@ -119,6 +119,10 @@ test_dataset.csv             Small sample of the alarm schema (used by the backe
   connected to, the alarms occurring on it, how alarms **propagate from it**
   (`alarm ▶ next_alarm` chains), and **cascades** to/from neighbours (correlated alarms
   flash along the links).
+- **Network analytics** (`📊 Insights`) has two modes: **Live simulation** (default) —
+  propagation pathways, node resilience, and intra/cross-node timing computed from the
+  alarms the running ns-3 network is producing this session — and **Historical dataset** —
+  the same analyses precomputed from the full BT alarm dataset, as a calibration baseline.
 
 > **ns-3 scale note.** The ns-3 LTE engine is CPU-bound; live simulation is practical up
 > to ~30 base stations. Larger topologies still load for design, node-type visualisation
