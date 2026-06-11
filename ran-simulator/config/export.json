@@ -22,7 +22,14 @@
     },
 
     "regional_power": { "cluster_size": 5, "at_sim_time": 40, "duration_s": 12 },
-    "maintenance": { "n_nodes": 2, "window_start": 20, "window_duration_s": 60, "n_burst_alarms": 6 },
+    "maintenance": {
+      "n_nodes": 2, "window_start": 20, "window_duration_s": 60, "n_burst_alarms": 6,
+      "_severity_weights_note": "bias burst severity mix by × on dataset frequency; Hardware/Power have no Critical, so only Major/Minor/Warning are reachable",
+      "severity_weights": { "Major": 1, "Minor": 4, "Warning": 6 }
+    },
+
+    "_diurnal_note": "optional 24-vector of relative network load by hour (Mon..Sun same curve); null = no modulation. Modulates per-episode UE mobility intensity (proxy for traffic) keyed to the episode anchor hour.",
+    "diurnal_load_weights": null,
 
     "_provenance_note": "clear/ack delays are SYNTHESISED (the historical dataset has no cleared/acknowledged timestamps); per-severity log-normal in seconds, tunable below.",
     "clear_delay_lognorm_s": {

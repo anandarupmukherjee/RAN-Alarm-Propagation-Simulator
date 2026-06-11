@@ -88,10 +88,20 @@ edge (X2) fault, one row is emitted per endpoint as source.
 |----------|-----------|
 | `clean` (default) | Organic dynamics + scripted single-element faults (`fault_schedule`: backhaul/X2/radio cuts at randomised times). Genuine propagation. |
 | `regional_power` | Clean background **plus** a simultaneous fault across a random connected cluster of K nodes (same sim-second, shared `group_id`) — a shared-cause confounder. The cluster nodes have **no causal edges between them** (only group membership), so a false-link experiment can test for spurious links. |
-| `maintenance` | Clean background **plus** per-node maintenance windows: `bs_maintenance_status = under_maintenance` and a burst of **injection-only label alarms** drawn from the Hardware / Power & Environment catalogue categories (adds names + Critical/Warning the radio/transport path never produces). Windows recorded in the manifest. |
+| `maintenance` | Clean background **plus** per-node maintenance windows: `bs_maintenance_status = under_maintenance` and a burst of **injection-only label alarms** drawn from the Hardware / Power & Environment catalogue categories (names the radio/transport path never produces). Windows recorded in the manifest. The burst severity mix is tunable via `maintenance.severity_weights` (weight = dataset frequency × severity weight); note these categories contain **no Critical** alarms, so only Major/Minor/Warning are reachable. |
 
 Per-cell, per-type alarm rate limiting (`churn_holdoff_s`) keeps per-BS volumes BT-like
 (median in the tens per episode) without losing fault onset.
+
+**Diurnal modulation (optional).** `diurnal_load_weights` (a 24-vector of relative hourly
+load, or `null` = off) scales each episode's UE mobility intensity by its anchor hour — a
+proxy for diurnal traffic, so busier hours produce more handover/RLF activity and a
+realistic hour-of-day alarm pattern.
+
+**Transport topology.** `topology_edges.csv` carries both `x2` edges (the inter-eNB links)
+and `backhaul` edges from each eNB to a virtual EPC/core element (`s_epc`, also listed in
+`topology.csv`) — so an analysis pipeline can reason about S1-U-backhaul-shared faults
+(`backhaul_cut` targets a single eNB).
 
 ---
 

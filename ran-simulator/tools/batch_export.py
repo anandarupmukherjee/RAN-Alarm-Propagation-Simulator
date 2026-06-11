@@ -94,6 +94,22 @@ def ue_per_enb(n_nodes):
 
 
 # ─── ns-3 core invocation ────────────────────────────────────────────────────
+def diurnal_ue_speed(cfg, hour):
+    """Per-episode UE mobility intensity modulated by the anchor hour, as a proxy
+    for diurnal network load: busier hours → faster/more-mobile UEs → more
+    handover/RLF activity → more alarms. `diurnal_load_weights` is an optional
+    24-vector of relative loads; null/absent ⇒ no modulation (base speed)."""
+    base = float(cfg.get("ue_speed", 45))
+    w = cfg.get("diurnal_load_weights")
+    if not w or len(w) != 24:
+        return base
+    mean = sum(w) / 24.0
+    if mean <= 0:
+        return base
+    factor = max(0.5, min(2.0, w[hour] / mean))   # clamp to ±2× for stability
+    return round(base * factor, 2)
+
+
 def write_scenario(path, topo, ue_speed, churn_holdoff):
     n = len(topo["nodes"])
     with open(path, "w") as f:
@@ -124,16 +140,21 @@ def select_connected_cluster(topo, k, rng):
     return cluster
 
 
-def build_burst_pool(mapper):
+def build_burst_pool(mapper, severity_weights=None):
     """Injection-only label alarms from the Hardware + Power & Environment
-    catalogue categories (with frequencies), for maintenance bursts."""
+    catalogue categories, for maintenance bursts. Sampling weight = dataset
+    frequency × severity_weights[severity] so the mix can be biased toward rarer
+    severities (NB: these categories contain no Critical alarms, so the bias can
+    only reach the Warning/Minor names that exist there)."""
+    sw = severity_weights or {}
     cat = mapper.get_alarm_catalog()
     pool = []
     for c in cat["categories"]:
         if c["name"] in ("Hardware", "Power & Environment"):
             for a in c["alarms"]:
-                pool.append((a["name"], max(1, int(a["count"]))))
-    return pool or [("Board Hardware Fault", 1)]
+                w = max(1, int(a["count"])) * float(sw.get(a["severity"], 1.0))
+                pool.append((a["name"], w))
+    return pool or [("Board Hardware Fault", 1.0)]
 
 
 def build_scenario(cfg, topo, sim_t, seed, ep):
@@ -236,7 +257,8 @@ def run_episode(ep_index, anchor, seed, cfg, mapper, binary, anon, workdir, burs
 
     scen = os.path.join(workdir, f"scenario_{ep_index}.txt")
     fault_f = os.path.join(workdir, f"faults_{ep_index}.txt")
-    write_scenario(scen, topo, cfg.get("ue_speed", 45), cfg.get("churn_holdoff_s", 4))
+    ue_speed = diurnal_ue_speed(cfg, anchor.hour)     # diurnal activity modulation
+    write_scenario(scen, topo, ue_speed, cfg.get("churn_holdoff_s", 4))
 
     fault_defs, fault_lines = build_scenario(cfg, topo, sim_t, seed, ep_index)
     with open(fault_f, "w") as f:
@@ -447,7 +469,7 @@ def main():
     anon = anonymise(topo0)
     anchors = assign_anchors(cfg, int(cfg["episodes"]))
 
-    burst_pool = build_burst_pool(mapper)
+    burst_pool = build_burst_pool(mapper, cfg.get("maintenance", {}).get("severity_weights"))
     all_records, faults_all, topo_rows, topo_edge_rows, maint_windows = [], [], [], [], []
     with tempfile.TemporaryDirectory() as workdir:
         for a in anchors:
@@ -471,6 +493,14 @@ def main():
             for nd in topo["nodes"]:
                 topo_rows.append({"episode_id": a["episode_id"], "node_id": anon[nd["id"]],
                                   "x": nd["x"], "y": nd["y"]})
+            # Virtual EPC/core aggregation element + per-eNB S1-U backhaul edges
+            # (the backhaul is per-node; backhaul_cut faults target single nodes).
+            cx = round(sum(nd["x"] for nd in topo["nodes"]) / len(topo["nodes"]), 1)
+            cy = round(sum(nd["y"] for nd in topo["nodes"]) / len(topo["nodes"]), 1)
+            topo_rows.append({"episode_id": a["episode_id"], "node_id": "s_epc", "x": cx, "y": cy})
+            for nd in topo["nodes"]:
+                topo_edge_rows.append({"episode_id": a["episode_id"], "node_a": anon[nd["id"]],
+                                       "node_b": "s_epc", "edge_type": "backhaul"})
             for e in topo["edges"]:
                 topo_edge_rows.append({"episode_id": a["episode_id"], "node_a": anon[e["a"]],
                                        "node_b": anon[e["b"]], "edge_type": "x2"})
