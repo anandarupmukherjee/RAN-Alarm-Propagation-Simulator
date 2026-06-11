@@ -150,8 +150,15 @@ section is reported, never asserted.
   has no such components to fail. Consequently the `clean` scenario shows ~10 of 171 alarm
   names and a Minor/Major-heavy severity mix; the real dataset is ~80 % Major across 171
   names. This deviation is **reported by the validator, not forced**.
-- **ns-3 LTE is CPU-bound** — batch episodes are practical at the demo/town scale (~10–30
-  base stations); larger topologies run but slowly.
+- **ns-3 LTE is CPU-bound, and export volume is throughput-limited.** Measured on the
+  `country` topology (87 eNBs): ~60 wall-seconds per simulated second and ~0.2 alarms per
+  wall-second under BT-realistic damping — interference is computed per-UE against every
+  eNB, so throughput falls roughly as 1/eNBs and adding UEs does not help. Consequences:
+  a 100k-alarm export at ~87 nodes is ~5 CPU-days at full fidelity; large *and* high-volume
+  exports are only practical either by (a) dropping the damping (`--churn-holdoff ~0`) and
+  accepting a release/interference-flood regime, or (b) using a smaller topology
+  (`demo`/`town`/`--topology country` with fewer access nodes). Tuning flags:
+  `--topology`, `--ue-per-enb`, `--churn-holdoff`.
 - **Cross-node propagation** in any downstream analysis should be evaluated against
   `causal_edges.csv`; temporal co-occurrence (e.g. `regional_power` clusters) is a shared
   cause, not a causal edge.

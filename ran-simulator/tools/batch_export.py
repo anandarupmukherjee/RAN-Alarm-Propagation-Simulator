@@ -79,17 +79,61 @@ def build_topology(name):
                 nodes.append({"id": eid, "x": hx + accR * math.cos(sa), "y": hy + accR * math.sin(sa),
                               "ne_type": ACCESS_MIX[s % len(ACCESS_MIX)]})
                 edges.append({"a": hub, "b": eid})
-        # de-dupe edges
-        seen, uniq = set(), []
-        for e in edges:
-            k = tuple(sorted((e["a"], e["b"])))
-            if k not in seen:
-                seen.add(k); uniq.append(e)
-        return {"nodes": nodes, "edges": uniq}
+        return _dedup(nodes, edges)
+    if name == "country":
+        # Country-scale RAN: 3 national cores (resilience ring) → 4 metro agg
+        # hubs per core → 6 access eNBs per hub = 3 + 12 + 72 = 87 nodes.
+        return _radial(cx=1700, cy=1600, cores=3, core_type="NE40E (Core)", core_r=780,
+                       hubs_per_core=4, hub_type="ATN 910 (Agg)", hub_r=640,
+                       access_per_hub=6, access_r=250, access_mix=ACCESS_MIX)
     raise ValueError(f"unknown topology '{name}'")
 
 
-def ue_per_enb(n_nodes):
+def _dedup(nodes, edges):
+    seen, uniq = set(), []
+    for e in edges:
+        k = tuple(sorted((e["a"], e["b"])))
+        if k not in seen:
+            seen.add(k); uniq.append(e)
+    return {"nodes": nodes, "edges": uniq}
+
+
+def _radial(cx, cy, cores, core_type, core_r, hubs_per_core, hub_type, hub_r,
+            access_per_hub, access_r, access_mix):
+    nodes, edges, core_ids = [], [], []
+    for c in range(cores):
+        a = 0 if cores == 1 else 2 * math.pi * c / cores - math.pi / 2
+        x = cx if cores == 1 else cx + core_r * math.cos(a)
+        y = cy if cores == 1 else cy + core_r * math.sin(a)
+        cid = f"CORE-{c+1}"
+        nodes.append({"id": cid, "x": round(x, 1), "y": round(y, 1), "ne_type": core_type})
+        core_ids.append(cid)
+    for i in range(cores):                       # core resilience ring
+        if cores > 1:
+            edges.append({"a": core_ids[i], "b": core_ids[(i + 1) % cores]})
+    for c in range(cores):
+        ca = 0 if cores == 1 else 2 * math.pi * c / cores - math.pi / 2
+        cxp = cx if cores == 1 else cx + core_r * math.cos(ca)
+        cyp = cy if cores == 1 else cy + core_r * math.sin(ca)
+        for h in range(hubs_per_core):
+            ha = 2 * math.pi * h / hubs_per_core + ca
+            hx, hy = cxp + hub_r * math.cos(ha), cyp + hub_r * math.sin(ha)
+            hub = f"AGG-{c+1}-{h+1}"
+            nodes.append({"id": hub, "x": round(hx, 1), "y": round(hy, 1), "ne_type": hub_type})
+            edges.append({"a": core_ids[c], "b": hub})
+            for s in range(access_per_hub):
+                sa = 2 * math.pi * s / access_per_hub
+                eid = f"ENB-{c+1}{h+1}{s+1:02d}"
+                nodes.append({"id": eid, "x": round(hx + access_r * math.cos(sa), 1),
+                              "y": round(hy + access_r * math.sin(sa), 1),
+                              "ne_type": access_mix[s % len(access_mix)]})
+                edges.append({"a": hub, "b": eid})
+    return _dedup(nodes, edges)
+
+
+def ue_per_enb(n_nodes, override=None):
+    if override:
+        return int(override)
     return 4 if n_nodes <= 20 else 3 if n_nodes <= 60 else 2 if n_nodes <= 120 else 1
 
 
@@ -110,14 +154,14 @@ def diurnal_ue_speed(cfg, hour):
     return round(base * factor, 2)
 
 
-def write_scenario(path, topo, ue_speed, churn_holdoff):
+def write_scenario(path, topo, ue_speed, churn_holdoff, ue_override=None):
     n = len(topo["nodes"])
     with open(path, "w") as f:
         for nd in topo["nodes"]:
             f.write(f"NODE {nd['id']} {nd['x']} {nd['y']}\n")
         for e in topo["edges"]:
             f.write(f"EDGE {e['a']} {e['b']}\n")
-        f.write(f"UEPERENB {ue_per_enb(n)}\n")
+        f.write(f"UEPERENB {ue_per_enb(n, ue_override)}\n")
         f.write(f"UESPEED {ue_speed}\n")
         f.write("SPEED 30\n")
         f.write(f"CHURNHOLDOFF {churn_holdoff}\n")
@@ -258,7 +302,7 @@ def run_episode(ep_index, anchor, seed, cfg, mapper, binary, anon, workdir, burs
     scen = os.path.join(workdir, f"scenario_{ep_index}.txt")
     fault_f = os.path.join(workdir, f"faults_{ep_index}.txt")
     ue_speed = diurnal_ue_speed(cfg, anchor.hour)     # diurnal activity modulation
-    write_scenario(scen, topo, ue_speed, cfg.get("churn_holdoff_s", 4))
+    write_scenario(scen, topo, ue_speed, cfg.get("churn_holdoff_s", 4), cfg.get("ue_per_enb_override"))
 
     fault_defs, fault_lines = build_scenario(cfg, topo, sim_t, seed, ep_index)
     with open(fault_f, "w") as f:
@@ -451,6 +495,9 @@ def main():
     ap.add_argument("--verify", action="store_true", help="print episode-placement + 1:1 mapping diagnostics")
     ap.add_argument("--git-commit", default="unknown", help="simulator git commit hash (for manifest)")
     ap.add_argument("--scenario", default=None, help="override export.scenario (clean/regional_power/maintenance)")
+    ap.add_argument("--topology", default=None, help="override export.topology (demo/town/country)")
+    ap.add_argument("--ue-per-enb", type=int, default=None, help="override UE count per eNB")
+    ap.add_argument("--churn-holdoff", type=float, default=None, help="override churn_holdoff_s")
     args = ap.parse_args()
 
     cfg = json.load(open(args.config))["export"]
@@ -460,6 +507,12 @@ def main():
         cfg["sim_seconds_per_episode"] = args.sim_seconds
     if args.scenario is not None:
         cfg["scenario"] = args.scenario
+    if args.topology is not None:
+        cfg["topology"] = args.topology
+    if args.ue_per_enb is not None:
+        cfg["ue_per_enb_override"] = args.ue_per_enb
+    if args.churn_holdoff is not None:
+        cfg["churn_holdoff_s"] = args.churn_holdoff
     mapper = load_mapper(args.mapper, args.stats)
     out_base = args.out or cfg.get("export_dir", "exports")
     run_dir = os.path.join(out_base, f"run_{args.run_id}")
